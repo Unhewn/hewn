@@ -105,8 +105,7 @@ Standard Go. `gofmt`, `go vet`, and the linter config are authoritative for mech
 - Short receivers, short scopes, long names only where the scope is long.
 - Avoid `Manager`, `Handler`, `Helper`, `Util`. If a type resists a name, it is doing too much.
 
-**Comments**
-- Doc comments on every exported symbol, starting with the name.
+**Comments** (doc comments on every exported symbol are enforced by `revive`'s `exported` rule, not restated here)
 - Inline comments explain *why*, not *what*. Delete any comment that restates the code.
 - Do not add comments narrating changes ("updated to handle X"). Git does that.
 
@@ -139,12 +138,8 @@ Coverage is not a target. Cover the agent loop, tool execution, sandbox escapes,
 
 ## Dependencies
 
-The dependency list is short on purpose and every addition is a decision.
+The dependency list is short on purpose and every addition is a decision. Banned packages (CGo SQLite drivers, LLM SDKs, `viper`, `logrus`, and more) are enforced by `.golangci.yml`'s `depguard` rule, not restated here.
 
-Current set: `charmbracelet/bubbletea`, `bubbles`, `lipgloss`, `glamour`, `spf13/cobra`, `modernc.org/sqlite`, `BurntSushi/toml`, `gopkg.in/yaml.v3` (skill front matter).
-
-- **No CGo.** This is why SQLite is `modernc.org/sqlite`. Do not switch to `mattn/go-sqlite3`; it breaks cross-compilation and static binaries.
-- **No LLM SDKs or frameworks.** Provider clients are hand-rolled against the documented HTTP APIs. We need direct control over streaming and tool-call deltas, and these wire formats are simple. Do not add `langchaingo`, official vendor SDKs, or similar.
 - **No `viper`, no `logrus`.** Config is TOML + flags; logging is `log/slog`.
 - Prefer stdlib. If a dependency saves fewer than ~200 lines, write the 200 lines.
 - Adding a dependency: propose it, state what it replaces, and wait for confirmation. Do not add one silently as part of a larger change.
