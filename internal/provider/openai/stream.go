@@ -14,8 +14,8 @@ import (
 // Anthropic's distinctly-typed SSE events, every chunk carries the same
 // shape: an incremental delta and (on the last one) a finish_reason.
 // There's no explicit block-start/block-stop signal -- a tool call is
-// "started" the first time its index carries an id+name, and "ended" when
-// either the next index appears or finish_reason arrives.
+// "started" the first time its index carries an id+name, and all open
+// calls are "ended" together once finish_reason arrives.
 type wireChunk struct {
 	Choices []wireChoice    `json:"choices"`
 	Usage   *wireChunkUsage `json:"usage,omitempty"`
