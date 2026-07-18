@@ -76,6 +76,8 @@ func runHeadless(cmd *cobra.Command, prompt string) error {
 	registry := tool.NewRegistry()
 	if !noTools {
 		registry.Register(tool.NewRead(sb))
+		registry.Register(tool.NewWrite(sb))
+		registry.Register(tool.NewEdit(sb))
 		registry.Register(tool.NewBash(sb, []string{"ANTHROPIC_API_KEY"}))
 	}
 
