@@ -13,6 +13,7 @@ import (
 
 	"github.com/unhewn/hewn/internal/agent"
 	"github.com/unhewn/hewn/internal/ctxfile"
+	"github.com/unhewn/hewn/internal/mcp"
 	"github.com/unhewn/hewn/internal/provider"
 	_ "github.com/unhewn/hewn/internal/provider/anthropic" // registers itself with provider.Register
 	_ "github.com/unhewn/hewn/internal/provider/openai"    // registers itself with provider.Register
@@ -175,6 +176,7 @@ func loadResumeTarget(ctx context.Context, store *session.Store, idOrPrefix stri
 type built struct {
 	loop         *agent.Loop
 	sandbox      *sandbox.Sandbox
+	mcpServers   *mcp.Servers
 	cwd          string
 	providerName string
 }
@@ -235,11 +237,24 @@ func buildLoop(ctx context.Context, cmd *cobra.Command, store *session.Store, ap
 	}
 
 	registry := tool.NewRegistry()
+	var mcpServers *mcp.Servers
 	if !noTools {
 		registry.Register(tool.NewRead(sb))
 		registry.Register(tool.NewWrite(sb))
 		registry.Register(tool.NewEdit(sb))
 		registry.Register(tool.NewBash(sb, []string{"ANTHROPIC_API_KEY"}))
+
+		var mcpWarnings []string
+		mcpServers, mcpWarnings, err = mcp.Connect(ctx, cwd)
+		if err != nil {
+			return built{}, fmt.Errorf("hewn: %w", err)
+		}
+		for _, w := range mcpWarnings {
+			fmt.Fprintf(os.Stderr, "hewn: %s\n", w)
+		}
+		for _, t := range mcpServers.Tools() {
+			registry.Register(t)
+		}
 	}
 
 	loop := &agent.Loop{
@@ -263,7 +278,7 @@ func buildLoop(ctx context.Context, cmd *cobra.Command, store *session.Store, ap
 	}
 	loop.SessionID = sessionID
 
-	return built{loop: loop, sandbox: sb, cwd: cwd, providerName: providerName}, nil
+	return built{loop: loop, sandbox: sb, mcpServers: mcpServers, cwd: cwd, providerName: providerName}, nil
 }
 
 // registerSkills loads .hewn/skills/ under cwd and adds each to registry as
@@ -308,6 +323,7 @@ func runHeadless(cmd *cobra.Command, prompt string) error {
 		return err
 	}
 	defer b.sandbox.Close()
+	defer b.mcpServers.Close()
 
 	return renderer.Render(b.loop.Run(ctx, prompt))
 }
@@ -342,6 +358,7 @@ func runInteractive(cmd *cobra.Command) error {
 		return err
 	}
 	defer b.sandbox.Close()
+	defer b.mcpServers.Close()
 
 	registry := slash.NewRegistry()
 	slash.Register(registry)
@@ -417,6 +434,7 @@ func runTUI(cmd *cobra.Command) error {
 		return err
 	}
 	defer b.sandbox.Close()
+	defer b.mcpServers.Close()
 
 	registry := slash.NewRegistry()
 	slash.Register(registry)

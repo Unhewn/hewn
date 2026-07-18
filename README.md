@@ -53,7 +53,7 @@ hewn --provider openai --model <model-name>
 | `--provider` | `anthropic` | `anthropic` or `openai` (any OpenAI-compatible backend) |
 | `--model` | `claude-opus-4-8` | model name; must be one your `--provider` actually serves |
 | `--cwd` | current directory | project directory the agent reads/edits/runs commands in |
-| `--no-tools` | `false` | disable tool use |
+| `--no-tools` | `false` | disable tool use, including any configured MCP servers |
 | `--yolo` | `false` | pre-approve every tool call for this run |
 | `--db` | `~/.local/share/hewn/hewn.db` | session database path |
 | `--list` | `false` | list recent sessions and exit |
@@ -86,3 +86,23 @@ then style. Be concise.
 `name` defaults to the filename (`.hewn/skills/code-review.md` → `/code-review`) if omitted. `tools` defaults to no restriction (every registered tool stays available) when omitted. Everything after the closing `---` is appended to the AGENTS.md-derived base system prompt (see "Context files" above) for the rest of the session, the same persist-until-changed behavior as `/model` — activating a skill doesn't discard your project's `AGENTS.md` conventions.
 
 A skill file that's missing front matter, or lists a tool that doesn't exist, is skipped with a warning on startup rather than failing the session.
+
+## MCP servers
+
+Hewn connects to [MCP](https://modelcontextprotocol.io) servers declared in `.hewn/mcp.json`, in every mode (headless, interactive, and TUI) — unlike skills, these are real capabilities, not a persona switch:
+
+```json
+{
+  "mcpServers": {
+    "example": {
+      "command": "npx",
+      "args": ["-y", "@some/mcp-server"],
+      "env": { "API_KEY": "..." }
+    }
+  }
+}
+```
+
+The shape matches Claude Desktop's config, so an existing `mcpServers` block can usually be copied in directly. Each server's tools appear to the model as `mcp__<server>__<tool>`, and are **always** approval-gated (`mutating` risk) — Hewn can't verify what a third-party server's tool actually does, so there's no auto-read-only path for MCP tools the way there is for its own `read` tool.
+
+A server that fails to start, or times out (15s) connecting, is skipped with a warning on startup; the rest of the session proceeds normally.

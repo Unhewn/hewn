@@ -48,6 +48,7 @@ internal/tool/       Tool interface, registry, built-in tools, approval policy.
 internal/session/    SQLite persistence. Sessions, messages, tool calls, migrations.
 internal/ctxfile/    AGENTS.md discovery and system-prompt assembly.
 internal/skill/      Declarative skill discovery: parses .hewn/skills/*.md front matter into prompt+tool-subset bundles.
+internal/mcp/        MCP client: connects to servers declared in .hewn/mcp.json, exposes their tools as tool.Tool.
 internal/config/     Layered config: flags > project > user > defaults.
 internal/tui/        Bubble Tea. Views only — no business logic, no I/O, no provider calls.
 internal/sandbox/    Path jailing (os.Root), env filtering, command policy.
@@ -141,6 +142,7 @@ Coverage is not a target. Cover the agent loop, tool execution, sandbox escapes,
 The dependency list is short on purpose and every addition is a decision. Banned packages (CGo SQLite drivers, LLM SDKs, `viper`, `logrus`, and more) are enforced by `.golangci.yml`'s `depguard` rule, not restated here.
 
 - **No `viper`, no `logrus`.** Config is TOML + flags; logging is `log/slog`.
+- **Exception: `github.com/modelcontextprotocol/go-sdk`.** Not an LLM provider SDK (those stay hand-rolled, see `internal/provider`) — it's the MCP *protocol* client (`internal/mcp`), a much larger surface (capability negotiation, JSON-RPC framing, cancellation) than the "~200 lines" bar below justifies hand-rolling, and Google co-maintains it.
 - Prefer stdlib. If a dependency saves fewer than ~200 lines, write the 200 lines.
 - Adding a dependency: propose it, state what it replaces, and wait for confirmation. Do not add one silently as part of a larger change.
 
