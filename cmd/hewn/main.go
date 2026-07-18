@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/unhewn/hewn/internal/agent"
+	"github.com/unhewn/hewn/internal/ctxfile"
 	"github.com/unhewn/hewn/internal/provider"
 	_ "github.com/unhewn/hewn/internal/provider/anthropic" // registers itself with provider.Register
 	_ "github.com/unhewn/hewn/internal/provider/openai"    // registers itself with provider.Register
@@ -84,6 +85,17 @@ func dbPath(cmd *cobra.Command) (string, error) {
 		return "", fmt.Errorf("hewn: resolve home directory: %w", err)
 	}
 	return filepath.Join(home, ".local", "share", "hewn", "hewn.db"), nil
+}
+
+// userAgentsPath resolves ~/.config/hewn/AGENTS.md. Returns "" (skip) if
+// the home directory can't be resolved -- an absent or unreadable
+// user-global file is never fatal.
+func userAgentsPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "hewn", "AGENTS.md")
 }
 
 // runList prints recent sessions and exits; it never touches a provider or
@@ -200,6 +212,14 @@ func buildLoop(ctx context.Context, cmd *cobra.Command, store *session.Store, ap
 		sessionID, providerName, model, cwd, history = r.sessionID, r.provider, r.model, r.cwd, r.history
 	}
 
+	system, warnings, err := ctxfile.Assemble(cwd, userAgentsPath())
+	if err != nil {
+		return built{}, fmt.Errorf("hewn: %w", err)
+	}
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "hewn: %s\n", w)
+	}
+
 	// Construct the provider (and everything else rooted at cwd) only
 	// after resolving provider/model/cwd above, and before creating a new
 	// session, so a bad --provider or missing API key never leaves an
@@ -227,6 +247,7 @@ func buildLoop(ctx context.Context, cmd *cobra.Command, store *session.Store, ap
 		Tools:    registry,
 		Approval: tool.NewPolicy(approver, yolo),
 		Model:    model,
+		System:   system,
 		Session:  store,
 	}
 	if history != nil {
@@ -248,15 +269,16 @@ func buildLoop(ctx context.Context, cmd *cobra.Command, store *session.Store, ap
 // registerSkills loads .hewn/skills/ under cwd and adds each to registry as
 // a slash command, printing any problems to stderr. A skill-loading
 // problem is always non-fatal -- a session must start whether or not
-// skills load cleanly.
-func registerSkills(registry *slash.Registry, tools *tool.Registry, cwd string) {
+// skills load cleanly. baseSystem is composed with each skill's own
+// prompt on activation (slash.RegisterSkills) rather than replacing it.
+func registerSkills(registry *slash.Registry, tools *tool.Registry, cwd, baseSystem string) {
 	skillsDir := filepath.Join(cwd, ".hewn", "skills")
 	skills, warnings, err := skill.Load(skillsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hewn: loading skills: %v\n", err)
 		return
 	}
-	warnings = append(warnings, slash.RegisterSkills(registry, skills, tools)...)
+	warnings = append(warnings, slash.RegisterSkills(registry, skills, tools, baseSystem)...)
 	for _, w := range warnings {
 		fmt.Fprintf(os.Stderr, "hewn: %s\n", w)
 	}
@@ -332,7 +354,7 @@ func runInteractive(cmd *cobra.Command) error {
 		CWD:          b.cwd,
 		ProviderName: b.providerName,
 	}
-	registerSkills(registry, b.loop.Tools, b.cwd)
+	registerSkills(registry, b.loop.Tools, b.cwd, b.loop.System)
 
 	fmt.Fprintln(os.Stdout, "hewn interactive -- /help for commands, /quit or Ctrl+D to exit")
 
@@ -406,7 +428,7 @@ func runTUI(cmd *cobra.Command) error {
 		CWD:          b.cwd,
 		ProviderName: b.providerName,
 	}
-	registerSkills(registry, b.loop.Tools, b.cwd)
+	registerSkills(registry, b.loop.Tools, b.cwd, b.loop.System)
 
 	return tui.Start(b.loop, approver, slashCtx, b.cwd, b.providerName)
 }

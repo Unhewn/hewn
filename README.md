@@ -61,6 +61,12 @@ hewn --provider openai --model <model-name>
 
 Every run — TUI, headless, or interactive — is recorded to the session database; there is no flag to disable persistence.
 
+## Context files
+
+Every session's system prompt is assembled from `AGENTS.md` files, no flag needed. Hewn walks up from `--cwd` (or the current directory), collecting each directory's `AGENTS.md` along the way, and stops once it reaches the directory containing `.git` (that directory's `AGENTS.md` is included, then the walk stops). `~/.config/hewn/AGENTS.md`, if present, is prepended before all of those as a user-global default. The pieces are concatenated general-to-specific — user-global first, repo root next, down to the closest `AGENTS.md` to `--cwd` last — so project-specific instructions have the final say over general ones.
+
+A missing file at any level is normal and silent. A file that exists but can't be read is reported as a warning on startup, not a fatal error.
+
 ## Skills
 
 Skills are declarative Markdown+front-matter command bundles — a system prompt plus an optional allowed-tool subset, invoked as an ordinary slash command. They're only available in `--interactive` and TUI sessions, not headless (`-p`) runs.
@@ -77,6 +83,6 @@ You are reviewing a code change. Focus on correctness bugs first,
 then style. Be concise.
 ```
 
-`name` defaults to the filename (`.hewn/skills/code-review.md` → `/code-review`) if omitted. `tools` defaults to no restriction (every registered tool stays available) when omitted. Everything after the closing `---` becomes the system prompt for the rest of the session, the same persist-until-changed behavior as `/model`.
+`name` defaults to the filename (`.hewn/skills/code-review.md` → `/code-review`) if omitted. `tools` defaults to no restriction (every registered tool stays available) when omitted. Everything after the closing `---` is appended to the AGENTS.md-derived base system prompt (see "Context files" above) for the rest of the session, the same persist-until-changed behavior as `/model` — activating a skill doesn't discard your project's `AGENTS.md` conventions.
 
 A skill file that's missing front matter, or lists a tool that doesn't exist, is skipped with a warning on startup rather than failing the session.

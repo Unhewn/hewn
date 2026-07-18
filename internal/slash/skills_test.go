@@ -15,7 +15,7 @@ func TestRegisterSkills_ActivatesPromptAndTools(t *testing.T) {
 	skills := []skill.Skill{
 		{Name: "reviewer", Description: "review code", Tools: []string{"read"}, Prompt: "You review code."},
 	}
-	warnings := RegisterSkills(c.Registry, skills, c.Tools)
+	warnings := RegisterSkills(c.Registry, skills, c.Tools, "")
 	if len(warnings) != 0 {
 		t.Fatalf("RegisterSkills() warnings = %v, want none", warnings)
 	}
@@ -47,7 +47,7 @@ func TestRegisterSkills_NoToolsMeansNoRestriction(t *testing.T) {
 	fullCount := len(c.Tools.List())
 
 	skills := []skill.Skill{{Name: "writer", Prompt: "Be a writer."}}
-	if warnings := RegisterSkills(c.Registry, skills, c.Tools); len(warnings) != 0 {
+	if warnings := RegisterSkills(c.Registry, skills, c.Tools, ""); len(warnings) != 0 {
 		t.Fatalf("RegisterSkills() warnings = %v", warnings)
 	}
 
@@ -57,11 +57,28 @@ func TestRegisterSkills_NoToolsMeansNoRestriction(t *testing.T) {
 	}
 }
 
+func TestRegisterSkills_ComposesWithBaseSystem(t *testing.T) {
+	c := newTestContext(t)
+	c.Loop.Tools = c.Tools
+
+	skills := []skill.Skill{{Name: "reviewer", Prompt: "You review code."}}
+	warnings := RegisterSkills(c.Registry, skills, c.Tools, "project conventions here")
+	if len(warnings) != 0 {
+		t.Fatalf("RegisterSkills() warnings = %v, want none", warnings)
+	}
+
+	c.Registry.Dispatch(context.Background(), c, "/reviewer")
+	want := "project conventions here\n\nYou review code."
+	if c.Loop.System != want {
+		t.Errorf("Loop.System = %q, want %q", c.Loop.System, want)
+	}
+}
+
 func TestRegisterSkills_SkipsCollisionWithBuiltin(t *testing.T) {
 	c := newTestContext(t)
 
 	skills := []skill.Skill{{Name: "help", Prompt: "pretend to be help"}}
-	warnings := RegisterSkills(c.Registry, skills, c.Tools)
+	warnings := RegisterSkills(c.Registry, skills, c.Tools, "")
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "collides") {
 		t.Fatalf("warnings = %v, want one mentioning a collision", warnings)
 	}
@@ -76,7 +93,7 @@ func TestRegisterSkills_SkipsUnknownTool(t *testing.T) {
 	c := newTestContext(t)
 
 	skills := []skill.Skill{{Name: "ghost", Tools: []string{"does-not-exist"}, Prompt: "boo"}}
-	warnings := RegisterSkills(c.Registry, skills, c.Tools)
+	warnings := RegisterSkills(c.Registry, skills, c.Tools, "")
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "unknown tool") {
 		t.Fatalf("warnings = %v, want one mentioning the unknown tool", warnings)
 	}
