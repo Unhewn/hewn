@@ -47,6 +47,7 @@ internal/provider/   LLM abstraction + per-provider implementations. Wire format
 internal/tool/       Tool interface, registry, built-in tools, approval policy.
 internal/session/    SQLite persistence. Sessions, messages, tool calls, migrations.
 internal/ctxfile/    AGENTS.md discovery and system-prompt assembly.
+internal/skill/      Declarative skill discovery: parses .hewn/skills/*.md front matter into prompt+tool-subset bundles.
 internal/config/     Layered config: flags > project > user > defaults.
 internal/tui/        Bubble Tea. Views only — no business logic, no I/O, no provider calls.
 internal/sandbox/    Path jailing (os.Root), env filtering, command policy.
@@ -140,7 +141,7 @@ Coverage is not a target. Cover the agent loop, tool execution, sandbox escapes,
 
 The dependency list is short on purpose and every addition is a decision.
 
-Current set: `charmbracelet/bubbletea`, `bubbles`, `lipgloss`, `glamour`, `spf13/cobra`, `modernc.org/sqlite`, `BurntSushi/toml`.
+Current set: `charmbracelet/bubbletea`, `bubbles`, `lipgloss`, `glamour`, `spf13/cobra`, `modernc.org/sqlite`, `BurntSushi/toml`, `gopkg.in/yaml.v3` (skill front matter).
 
 - **No CGo.** This is why SQLite is `modernc.org/sqlite`. Do not switch to `mattn/go-sqlite3`; it breaks cross-compilation and static binaries.
 - **No LLM SDKs or frameworks.** Provider clients are hand-rolled against the documented HTTP APIs. We need direct control over streaming and tool-call deltas, and these wire formats are simple. Do not add `langchaingo`, official vendor SDKs, or similar.

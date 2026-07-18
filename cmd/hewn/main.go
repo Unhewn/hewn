@@ -17,6 +17,7 @@ import (
 	_ "github.com/unhewn/hewn/internal/provider/openai"    // registers itself with provider.Register
 	"github.com/unhewn/hewn/internal/sandbox"
 	"github.com/unhewn/hewn/internal/session"
+	"github.com/unhewn/hewn/internal/skill"
 	"github.com/unhewn/hewn/internal/slash"
 	"github.com/unhewn/hewn/internal/tool"
 	"github.com/unhewn/hewn/internal/tui"
@@ -244,6 +245,23 @@ func buildLoop(ctx context.Context, cmd *cobra.Command, store *session.Store, ap
 	return built{loop: loop, sandbox: sb, cwd: cwd, providerName: providerName}, nil
 }
 
+// registerSkills loads .hewn/skills/ under cwd and adds each to registry as
+// a slash command, printing any problems to stderr. A skill-loading
+// problem is always non-fatal -- a session must start whether or not
+// skills load cleanly.
+func registerSkills(registry *slash.Registry, tools *tool.Registry, cwd string) {
+	skillsDir := filepath.Join(cwd, ".hewn", "skills")
+	skills, warnings, err := skill.Load(skillsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hewn: loading skills: %v\n", err)
+		return
+	}
+	warnings = append(warnings, slash.RegisterSkills(registry, skills, tools)...)
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "hewn: %s\n", w)
+	}
+}
+
 // runHeadless drives one prompt through the agent loop with a plain-stdout
 // renderer: HEWN.md §5's "same agent loop, only the event sink differs".
 // Every run is durably recorded (HEWN.md §2 item 8) -- there is no flag to
@@ -314,6 +332,7 @@ func runInteractive(cmd *cobra.Command) error {
 		CWD:          b.cwd,
 		ProviderName: b.providerName,
 	}
+	registerSkills(registry, b.loop.Tools, b.cwd)
 
 	fmt.Fprintln(os.Stdout, "hewn interactive -- /help for commands, /quit or Ctrl+D to exit")
 
@@ -387,6 +406,7 @@ func runTUI(cmd *cobra.Command) error {
 		CWD:          b.cwd,
 		ProviderName: b.providerName,
 	}
+	registerSkills(registry, b.loop.Tools, b.cwd)
 
 	return tui.Start(b.loop, approver, slashCtx, b.cwd, b.providerName)
 }

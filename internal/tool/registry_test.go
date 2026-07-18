@@ -48,3 +48,38 @@ func TestRegistry(t *testing.T) {
 		t.Errorf("re-registered read Risk() = %v, want RiskMutating", list[0].Risk())
 	}
 }
+
+func TestNewSubset(t *testing.T) {
+	base := NewRegistry()
+	base.Register(fakeTool{name: "read", risk: RiskReadOnly})
+	base.Register(fakeTool{name: "write", risk: RiskMutating})
+	base.Register(fakeTool{name: "bash", risk: RiskArbitrary})
+
+	t.Run("requested order, not base order", func(t *testing.T) {
+		sub, err := NewSubset(base, []string{"bash", "read"})
+		if err != nil {
+			t.Fatalf("NewSubset() error = %v", err)
+		}
+		list := sub.List()
+		if len(list) != 2 || list[0].Name() != "bash" || list[1].Name() != "read" {
+			t.Errorf("List() = %v, want [bash read]", list)
+		}
+	})
+
+	t.Run("unknown name errors", func(t *testing.T) {
+		if _, err := NewSubset(base, []string{"read", "missing"}); err == nil {
+			t.Fatal("NewSubset() error = nil, want error for unknown tool")
+		}
+	})
+
+	t.Run("subset is independent of base", func(t *testing.T) {
+		sub, err := NewSubset(base, []string{"read"})
+		if err != nil {
+			t.Fatalf("NewSubset() error = %v", err)
+		}
+		sub.Register(fakeTool{name: "extra", risk: RiskReadOnly})
+		if _, ok := base.Get("extra"); ok {
+			t.Error("Register on subset leaked into base")
+		}
+	})
+}

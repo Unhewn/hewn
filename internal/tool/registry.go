@@ -1,5 +1,7 @@
 package tool
 
+import "fmt"
+
 // Registry is the set of tools available to a session, in registration
 // order.
 type Registry struct {
@@ -34,4 +36,19 @@ func (r *Registry) List() []Tool {
 		out = append(out, r.tools[name])
 	}
 	return out
+}
+
+// NewSubset builds a new Registry containing only the named tools from
+// base, in the given order. It returns an error naming the first tool not
+// found in base rather than silently dropping it.
+func NewSubset(base *Registry, names []string) (*Registry, error) {
+	sub := NewRegistry()
+	for _, name := range names {
+		t, ok := base.Get(name)
+		if !ok {
+			return nil, fmt.Errorf("tool: unknown tool %q", name)
+		}
+		sub.Register(t)
+	}
+	return sub, nil
 }

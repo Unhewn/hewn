@@ -60,3 +60,23 @@ hewn --provider openai --model <model-name>
 | `--resume[=<id-or-prefix>]` | | resume the most recent session, or a specific one |
 
 Every run — TUI, headless, or interactive — is recorded to the session database; there is no flag to disable persistence.
+
+## Skills
+
+Skills are declarative Markdown+front-matter command bundles — a system prompt plus an optional allowed-tool subset, invoked as an ordinary slash command. They're only available in `--interactive` and TUI sessions, not headless (`-p`) runs.
+
+Drop a file per skill in `.hewn/skills/` under your project:
+
+```markdown
+---
+name: code-review
+description: review a diff for correctness and style
+tools: [read, bash]
+---
+You are reviewing a code change. Focus on correctness bugs first,
+then style. Be concise.
+```
+
+`name` defaults to the filename (`.hewn/skills/code-review.md` → `/code-review`) if omitted. `tools` defaults to no restriction (every registered tool stays available) when omitted. Everything after the closing `---` becomes the system prompt for the rest of the session, the same persist-until-changed behavior as `/model`.
+
+A skill file that's missing front matter, or lists a tool that doesn't exist, is skipped with a warning on startup rather than failing the session.
