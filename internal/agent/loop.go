@@ -34,7 +34,14 @@ type Loop struct {
 	Session   *session.Store
 	SessionID string
 
-	history []provider.Message
+	history    []provider.Message
+	totalUsage Usage
+}
+
+// TotalUsage returns the cumulative token usage across every turn this
+// loop has run so far.
+func (l *Loop) TotalUsage() Usage {
+	return l.totalUsage
 }
 
 // toolCall accumulates one tool-use content block across the
@@ -133,6 +140,10 @@ func (l *Loop) step(ctx context.Context, events chan<- Event) (provider.StopReas
 		case provider.KindUsage:
 			usage = ev.Usage
 			usageSeen = true
+			l.totalUsage.InputTokens += ev.Usage.InputTokens
+			l.totalUsage.OutputTokens += ev.Usage.OutputTokens
+			l.totalUsage.CacheReadTokens += ev.Usage.CacheReadTokens
+			l.totalUsage.CacheWriteTokens += ev.Usage.CacheWriteTokens
 			events <- NewUsage(Usage{
 				InputTokens:      ev.Usage.InputTokens,
 				OutputTokens:     ev.Usage.OutputTokens,

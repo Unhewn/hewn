@@ -152,6 +152,40 @@ func TestLoop_SimpleText(t *testing.T) {
 	}
 }
 
+func TestLoop_TotalUsageAccumulates(t *testing.T) {
+	p := &fakeProvider{turns: [][]provider.Event{
+		{
+			{Kind: provider.KindTextDelta, TextDelta: "one"},
+			{Kind: provider.KindUsage, Usage: provider.Usage{InputTokens: 10, OutputTokens: 3, CacheReadTokens: 1, CacheWriteTokens: 2}},
+			{Kind: provider.KindStopReason, StopReason: provider.StopReasonEndTurn},
+		},
+		{
+			{Kind: provider.KindTextDelta, TextDelta: "two"},
+			{Kind: provider.KindUsage, Usage: provider.Usage{InputTokens: 20, OutputTokens: 7, CacheReadTokens: 3, CacheWriteTokens: 4}},
+			{Kind: provider.KindStopReason, StopReason: provider.StopReasonEndTurn},
+		},
+	}}
+
+	l := &Loop{
+		Provider: p,
+		Tools:    tool.NewRegistry(),
+		Approval: tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false),
+		Model:    "test-model",
+	}
+
+	if got := l.TotalUsage(); got != (Usage{}) {
+		t.Fatalf("TotalUsage() before any turn = %+v, want zero value", got)
+	}
+
+	drainEvents(l.Run(context.Background(), "first"))
+	drainEvents(l.Run(context.Background(), "second"))
+
+	want := Usage{InputTokens: 30, OutputTokens: 10, CacheReadTokens: 4, CacheWriteTokens: 6}
+	if got := l.TotalUsage(); got != want {
+		t.Errorf("TotalUsage() after two turns = %+v, want %+v", got, want)
+	}
+}
+
 func TestLoop_ToolCallRoundTrip(t *testing.T) {
 	p := &fakeProvider{turns: [][]provider.Event{
 		{
