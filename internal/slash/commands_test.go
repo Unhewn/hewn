@@ -109,6 +109,9 @@ func TestNewCommand_StartsFreshSession(t *testing.T) {
 	if !strings.Contains(result.Output, c.Loop.SessionID) {
 		t.Errorf("/new output = %q, want it to mention the new session ID %s", result.Output, c.Loop.SessionID)
 	}
+	if !result.ClearTranscript {
+		t.Error("/new ClearTranscript = false, want true")
+	}
 
 	// The new session should actually exist in the store.
 	if _, err := c.Store.LoadSession(ctx, c.Loop.SessionID); err != nil {
@@ -130,6 +133,9 @@ func TestClearCommand_KeepsSameSession(t *testing.T) {
 	}
 	if !strings.Contains(result.Output, "cleared") {
 		t.Errorf("/clear output = %q, want it to mention clearing", result.Output)
+	}
+	if !result.ClearTranscript {
+		t.Error("/clear ClearTranscript = false, want true")
 	}
 }
 

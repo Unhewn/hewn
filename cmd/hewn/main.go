@@ -48,8 +48,7 @@ func main() {
 
 			prompt, _ := cmd.Flags().GetString("prompt")
 			if prompt == "" {
-				tui.Start()
-				return nil
+				return runTUI(cmd)
 			}
 			return runHeadless(cmd, prompt)
 		},
@@ -347,4 +346,46 @@ func runInteractive(cmd *cobra.Command) error {
 		}
 		cancel()
 	}
+}
+
+// runTUI launches the Bubble Tea front end, wired through the same
+// buildLoop setup as the other two modes: AGENTS.md invariant #1 means the
+// TUI itself must never construct a provider, tool registry, sandbox, or
+// session store, so all of that happens here and an already-wired
+// *agent.Loop is handed to tui.Start. Ctrl+C is handled inside the TUI
+// itself (Bubble Tea reads raw terminal input, so it arrives as an
+// ordinary keypress, not an OS signal), so there's no signal.NotifyContext
+// here unlike the other two modes.
+func runTUI(cmd *cobra.Command) error {
+	dbFile, err := dbPath(cmd)
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+
+	store, err := session.Open(ctx, dbFile)
+	if err != nil {
+		return fmt.Errorf("hewn: %w", err)
+	}
+	defer store.Close()
+
+	approver := tui.NewApprover()
+	b, err := buildLoop(ctx, cmd, store, approver, "tui session")
+	if err != nil {
+		return err
+	}
+	defer b.sandbox.Close()
+
+	registry := slash.NewRegistry()
+	slash.Register(registry)
+	slashCtx := &slash.Context{
+		Loop:         b.loop,
+		Store:        store,
+		Tools:        b.loop.Tools,
+		Registry:     registry,
+		CWD:          b.cwd,
+		ProviderName: b.providerName,
+	}
+
+	return tui.Start(b.loop, approver, slashCtx, b.cwd, b.providerName)
 }

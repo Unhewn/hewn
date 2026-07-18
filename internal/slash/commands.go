@@ -63,7 +63,7 @@ func newCommand() Command {
 			}
 			c.Loop.SessionID = sess.ID
 			c.Loop.SeedHistory(nil)
-			return Result{Output: fmt.Sprintf("started new session %s", sess.ID)}
+			return Result{Output: fmt.Sprintf("started new session %s", sess.ID), ClearTranscript: true}
 		},
 	}
 }
@@ -74,7 +74,7 @@ func clearCommand() Command {
 		Description: "clear context, keeping the same session",
 		Run: func(_ context.Context, c *Context, _ string) Result {
 			c.Loop.SeedHistory(nil)
-			return Result{Output: "context cleared"}
+			return Result{Output: "context cleared", ClearTranscript: true}
 		},
 	}
 }

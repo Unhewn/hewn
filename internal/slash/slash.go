@@ -22,6 +22,13 @@ import (
 type Result struct {
 	Output string
 	Quit   bool
+
+	// ClearTranscript is set by commands that reset the loop's history
+	// (/new, /clear). A caller that keeps its own view-layer transcript
+	// separate from Loop's internal history (the TUI, per AGENTS.md
+	// invariant #1) has no other way to learn that history and needs to
+	// clear its own display too.
+	ClearTranscript bool
 }
 
 // Context is everything a Command needs to act.
