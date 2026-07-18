@@ -14,6 +14,7 @@ import (
 	"github.com/unhewn/hewn/internal/agent"
 	"github.com/unhewn/hewn/internal/provider"
 	_ "github.com/unhewn/hewn/internal/provider/anthropic" // registers itself with provider.Register
+	_ "github.com/unhewn/hewn/internal/provider/openai"    // registers itself with provider.Register
 	"github.com/unhewn/hewn/internal/sandbox"
 	"github.com/unhewn/hewn/internal/session"
 	"github.com/unhewn/hewn/internal/slash"
@@ -55,8 +56,8 @@ func main() {
 	}
 
 	rootCmd.Flags().StringP("prompt", "p", "", "run prompt headless and exit")
-	rootCmd.Flags().String("provider", "anthropic", "provider to use")
-	rootCmd.Flags().String("model", "claude-opus-4-8", "model to use")
+	rootCmd.Flags().String("provider", "anthropic", `provider to use: "anthropic" or "openai" (any OpenAI-compatible backend -- Ollama, llama.cpp, LM Studio, Nous Research, OpenAI itself -- via OPENAI_BASE_URL and OPENAI_API_KEY)`)
+	rootCmd.Flags().String("model", "claude-opus-4-8", "model to use (a model name your chosen --provider actually serves, e.g. a locally-pulled Ollama model)")
 	rootCmd.Flags().String("cwd", "", "project directory (default: current directory)")
 	rootCmd.Flags().Bool("no-tools", false, "disable tool use")
 	rootCmd.Flags().Bool("yolo", false, "pre-approve every tool call for this run")

@@ -1,13 +1,13 @@
 package anthropic
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/unhewn/hewn/internal/provider"
+	"github.com/unhewn/hewn/internal/provider/sse"
 )
 
 // sseEvent mirrors the union of Anthropic Messages API streaming event
@@ -65,7 +65,7 @@ type blockState struct {
 // streaming HTTP response.
 type sseStream struct {
 	body       io.ReadCloser
-	scan       *bufio.Scanner
+	reader     *sse.Reader
 	blocks     map[int]*blockState
 	pending    []provider.Event
 	inputUsage wireUsage
@@ -73,11 +73,9 @@ type sseStream struct {
 }
 
 func newSSEStream(body io.ReadCloser) *sseStream {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	return &sseStream{
 		body:   body,
-		scan:   scanner,
+		reader: sse.NewReader(body, 1024*1024),
 		blocks: map[int]*blockState{},
 	}
 }
@@ -97,7 +95,7 @@ func (s *sseStream) Next() (provider.Event, error) {
 	}
 
 	for {
-		data, ok := s.nextDataLine()
+		data, ok := s.reader.Next()
 		if !ok {
 			s.err = io.EOF
 			return provider.Event{}, s.err
@@ -246,30 +244,6 @@ func (s *sseStream) drainPending() (provider.Event, bool, error) {
 	ev := s.pending[0]
 	s.pending = s.pending[1:]
 	return ev, true, nil
-}
-
-// nextDataLine reads one SSE event's concatenated "data:" payload, returning
-// ok=false once the underlying reader is exhausted with no further data.
-func (s *sseStream) nextDataLine() (string, bool) {
-	var data strings.Builder
-	found := false
-	for s.scan.Scan() {
-		line := s.scan.Text()
-		if line == "" {
-			if found {
-				return data.String(), true
-			}
-			continue
-		}
-		if rest, ok := strings.CutPrefix(line, "data:"); ok {
-			found = true
-			data.WriteString(strings.TrimPrefix(rest, " "))
-		}
-	}
-	if found {
-		return data.String(), true
-	}
-	return "", false
 }
 
 func toStopReason(s string) provider.StopReason {
