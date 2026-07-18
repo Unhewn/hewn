@@ -71,7 +71,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Simulate thinking + response (replace with real LLM later)
 			m.thinking = true
-			return m, simulateResponse(&m)
+			respCmd := simulateResponse(&m)
+			return m, respCmd
 		}
 	}
 
@@ -98,7 +99,7 @@ func (m Model) View() string {
 func Start() {
 	p := tea.NewProgram(InitialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
