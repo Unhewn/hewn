@@ -1,0 +1,1 @@
+Hewn - a minimal, hackable agent harness written in Go. Single static binary, TUI-first, provider agnostic, built by dogfooding; the foundation is just good enough to use Hewn to build the rest of Hewn. 
