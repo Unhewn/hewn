@@ -2,6 +2,8 @@
 
 > **Hewn** — a minimal, hackable agent harness written in Go. Single static binary, TUI-first, provider-agnostic, built by dogfooding: the foundation is just good enough to use Hewn to build the rest of Hewn.
 
+**Repository:** `github.com/unhewn/hewn` · **Module path:** `github.com/unhewn/hewn`
+
 **Status:** pre-code. This document is the working spec. Everything here is intentionally sized so it can be **expanded or contracted** — sections are tagged `[IN v0.1]`, `[DEFERRED]`, or `[UNDECIDED]`.
 
 ---
@@ -348,7 +350,7 @@ The whole point of the dogfood approach is that this decision gets *easier* the 
 ## 7. Next steps
 
 ### Immediate (this week)
-1. `go mod init github.com/<you>/hewn`, MIT LICENSE, README with the clean-room statement.
+1. `go mod init github.com/unhewn/hewn`, MIT LICENSE, README with the clean-room statement.
 2. Decide: **first provider** (recommend Anthropic — best tool-use semantics to build against).
 3. Build **bottom-up, not TUI-first**, despite the dogfood goal:
    - `provider/anthropic` + streaming, verified by a `go test` that hits the real API.

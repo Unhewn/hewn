@@ -1,0 +1,283 @@
+# golangci-lint configuration for Hewn
+# Schema: v2 (golangci-lint >= 2.0). Verify linter names with `golangci-lint linters`.
+#
+# Philosophy: enable linters that catch real bugs, plus a small number that
+# mechanically enforce the architectural invariants in AGENTS.md. Do NOT enable
+# style/complexity linters that argue with the author — they generate noise, get
+# nolint'd, and erode trust in the whole config.
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+
+linters:
+  default: none
+
+  enable:
+    # --- Correctness: the reason this file exists -------------------------
+    - errcheck        # unchecked errors
+    - govet           # stdlib vet suite
+    - staticcheck     # includes former gosimple + stylecheck
+    - ineffassign     # assignments never used
+    - unused          # dead code
+    - errorlint       # %v instead of %w, bad errors.Is/As usage
+    - nilerr          # `if err != nil { return nil }` — silently swallowed errors
+    - nilnil          # returning (nil, nil) from a (T, error) function
+    - bodyclose       # unclosed HTTP response bodies — critical for SSE streams
+    - noctx           # HTTP requests without a context
+    - contextcheck    # passing the wrong context / breaking cancellation chains
+    - sqlclosecheck   # unclosed sql.Rows / Stmt
+    - rowserrcheck    # unchecked rows.Err()
+    - makezero        # append to a non-zero-length make() slice
+    - durationcheck   # multiplying two durations
+    - exhaustive      # non-exhaustive switch on enum types — see settings below
+    - copyloopvar     # redundant loop var copies (Go 1.22+)
+    - reassign        # reassigning package variables from other packages
+
+    # --- Security / safety -------------------------------------------------
+    - gosec           # with a narrow exclusion set below
+    - forbidigo       # bans fmt.Print* etc. in non-TUI code
+
+    # --- Architectural enforcement (Hewn-specific) -------------------------
+    - depguard        # enforces the dependency policy in AGENTS.md
+
+    # --- Quality, low false-positive rate ----------------------------------
+    - revive          # configured narrowly below; replaces golint
+    - gocritic
+    - unconvert       # redundant type conversions
+    - wastedassign
+    - predeclared     # shadowing predeclared identifiers (len, cap, new…)
+    - usestdlibvars   # http.MethodGet instead of "GET"
+    - misspell
+    - testifylint     # no-op today (no testify), harmless if we never add it
+    - tparallel
+    - godot           # comments end in a period — keeps doc comments consistent
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: false
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment  # micro-optimization; not worth contorting structs
+
+    staticcheck:
+      checks:
+        - all
+        - -ST1000   # package comment on every package — too noisy for internal/
+        - -ST1003   # naming conventions; revive handles this better
+
+    exhaustive:
+      # This is the important one. The agent event union and RiskLevel are
+      # enums; a switch that silently ignores a new variant is exactly the
+      # class of bug that breaks the event ABI. Force explicit handling.
+      default-signifies-exhaustive: false
+      check:
+        - switch
+        - map
+
+    gosec:
+      excludes:
+        - G204  # subprocess with variable input — that IS the bash tool
+        - G304  # file inclusion via variable — that IS the read/write tools
+        # Both are gated by internal/sandbox and the approval flow instead.
+
+    forbidigo:
+      # All user-facing output goes through the TUI or the headless renderer.
+      # Stray fmt.Println corrupts the Bubble Tea alt-screen.
+      forbid:
+        - pattern: ^fmt\.Print.*$
+          msg: use the event bus or the renderer; direct stdout breaks the TUI
+        - pattern: ^print(ln)?$
+          msg: use log/slog
+        - pattern: ^log\.(Print|Fatal|Panic).*$
+          msg: use log/slog
+      analyze-types: true
+
+    depguard:
+      rules:
+        # --- Global bans, enforcing AGENTS.md dependency policy ------------
+        no-cgo-sqlite:
+          list-mode: lax
+          files:
+            - $all
+          deny:
+            - pkg: github.com/mattn/go-sqlite3
+              desc: CGo. Breaks static builds and cross-compilation. Use modernc.org/sqlite.
+            - pkg: github.com/tmc/langchaingo
+              desc: Provider clients are hand-rolled. We need direct control over streaming.
+            - pkg: github.com/anthropics/anthropic-sdk-go
+              desc: Same. See internal/provider.
+            - pkg: github.com/sashabaranov/go-openai
+              desc: Same. See internal/provider.
+            - pkg: github.com/spf13/viper
+              desc: Config is TOML + flags. See internal/config.
+            - pkg: github.com/sirupsen/logrus
+              desc: Use log/slog.
+            - pkg: go.uber.org/zap
+              desc: Use log/slog.
+            - pkg: github.com/pkg/errors
+              desc: Use fmt.Errorf with %w.
+            - pkg: github.com/stretchr/testify
+              desc: Standard library testing only.
+
+        # --- Dependency direction: tui -> agent -> provider/tool/session ---
+        agent-layer:
+          list-mode: lax
+          files:
+            - "**/internal/agent/**"
+          deny:
+            - pkg: github.com/unhewn/hewn/internal/tui
+              desc: Inverted dependency. The agent emits events; it does not know about the UI.
+            - pkg: github.com/charmbracelet/bubbletea
+              desc: No TUI framework outside internal/tui.
+
+        provider-layer:
+          list-mode: lax
+          files:
+            - "**/internal/provider/**"
+          deny:
+            - pkg: github.com/unhewn/hewn/internal/agent
+              desc: Providers are leaves. Translate to neutral types at the boundary.
+            - pkg: github.com/unhewn/hewn/internal/tui
+              desc: Providers are leaves.
+            - pkg: github.com/unhewn/hewn/internal/session
+              desc: Providers do not persist.
+
+        tool-layer:
+          list-mode: lax
+          files:
+            - "**/internal/tool/**"
+          deny:
+            - pkg: github.com/unhewn/hewn/internal/agent
+              desc: Tools are leaves; the agent dispatches to them, not the reverse.
+            - pkg: github.com/unhewn/hewn/internal/tui
+              desc: Tools stream output through ToolIO, not the UI.
+
+        tui-layer:
+          list-mode: lax
+          files:
+            - "**/internal/tui/**"
+          deny:
+            - pkg: github.com/unhewn/hewn/internal/session
+              desc: The TUI never touches the database. Read state from the event bus.
+            - pkg: github.com/unhewn/hewn/internal/provider
+              desc: The TUI never calls a provider.
+            - pkg: net/http
+              desc: The TUI performs no I/O.
+            - pkg: database/sql
+              desc: The TUI performs no I/O.
+
+    revive:
+      # Narrow, high-signal subset. Not the full revive ruleset.
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck  # handled by review, and internal/ is unexported anyway
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: indent-error-flow
+        - name: unexported-return
+        - name: time-naming
+        - name: var-declaration
+        - name: unreachable-code
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: waitgroup-by-value
+        - name: unhandled-error
+          arguments:
+            - "fmt.Fprintf"
+            - "fmt.Fprintln"
+            - "strings.Builder.WriteString"
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - hugeParam        # fights with value receivers on the Bubble Tea model
+        - rangeValCopy     # same
+        - unnamedResult
+
+    misspell:
+      locale: US
+
+    godot:
+      scope: declarations
+      capital: false
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+
+    rules:
+      # Tests get latitude on error checking and security scanning.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - contextcheck
+          - noctx
+          - exhaustive
+
+      # cmd/ is the one place stdout is legitimate (version, help, errors
+      # before the TUI starts).
+      - path: ^cmd/
+        linters:
+          - forbidigo
+
+      # The headless renderer's entire job is writing to stdout.
+      - path: internal/agent/render_.*\.go
+        linters:
+          - forbidigo
+
+      # The sandbox package legitimately does raw path and file operations —
+      # it is the layer that makes them safe for everyone else.
+      - path: internal/sandbox/
+        linters:
+          - gosec
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+    - gofumpt   # stricter gofmt; drop this line if it feels fussy
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/unhewn/hewn
+
+  exclusions:
+    generated: lax
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  # Fail on any new issue in a diff-based CI job; see the Makefile target.
+  new: false
+
+output:
+  formats:
+    text:
+      print-linter-name: true
+      print-issued-lines: true
+  sort-order:
+    - file
+    - linter

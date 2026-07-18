@@ -1,0 +1,100 @@
+# ---------------------------------------------------------------------------
+# Secrets — keep this block first. Nothing here should ever reach a commit.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!testdata/**/*.key
+
+# ---------------------------------------------------------------------------
+# Build output
+# ---------------------------------------------------------------------------
+# Leading slash so a future package or directory named "hewn" isn't ignored.
+/hewn
+/cmd/hewn/hewn
+/bin/
+/dist/            # goreleaser
+*.exe
+*.dll
+*.so
+*.dylib
+
+# ---------------------------------------------------------------------------
+# Go tooling
+# ---------------------------------------------------------------------------
+*.test
+*.out
+coverage.txt
+coverage.html
+cover.out
+/vendor/          # not vendoring; ignore so an accidental `go mod vendor` is invisible
+go.work
+go.work.sum
+*.prof
+*.pprof
+/fuzz/
+testdata/fuzz/
+
+# ---------------------------------------------------------------------------
+# Hewn runtime artifacts
+#
+# Hewn is developed by dogfooding, so running it inside this repo produces
+# local state. Ignore the volatile parts; project config and skills under
+# .hewn/ are intended to be committed, so they are not excluded here.
+# ---------------------------------------------------------------------------
+hewn-debug.log
+*.log
+.hewn/sessions/
+.hewn/cache/
+.hewn/tmp/
+.hewn/*.db
+.hewn/*.db-shm
+.hewn/*.db-wal
+.hewn/local.toml   # per-developer overrides; .hewn/config.toml IS committed
+
+# Stray databases from tests or manual runs at the repo root.
+/*.db
+/*.db-shm
+/*.db-wal
+/*.sqlite
+/*.sqlite3
+
+# ---------------------------------------------------------------------------
+# Editors and IDEs
+# ---------------------------------------------------------------------------
+.idea/
+.vscode/
+!.vscode/settings.json      # shared editor config, if we choose to commit one
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.zed/
+.helix/
+tags
+.tags
+
+# ---------------------------------------------------------------------------
+# OS noise
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Scratch
+#
+# Prefer these over inventing new ad-hoc ignore lines. If you need a throwaway
+# script or a sample repo to test against, put it here.
+# ---------------------------------------------------------------------------
+/scratch/
+/tmp/
+*.bak
+*.orig
+*.rej
