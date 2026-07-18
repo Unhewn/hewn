@@ -11,11 +11,16 @@ import (
 // Decision is a human's answer to an ApprovalRequest.
 type Decision int
 
-// Decision values.
+// Decision values. Deny/AllowOnce/AllowSession's numeric values match
+// HEWN.md's tool_calls.approved column ("0 denied, 1 once, 2
+// session-wide"); DecisionNotGated has no place in that column (a
+// read-only or yolo-bypassed call is persisted with a nil approved value
+// instead) and exists purely so Check can report what actually happened.
 const (
 	DecisionDeny Decision = iota
 	DecisionAllowOnce
 	DecisionAllowSession
+	DecisionNotGated
 )
 
 // ErrDenied is returned by Policy.Check when a call was denied.
@@ -53,40 +58,47 @@ func NewPolicy(approver Approver, yolo bool) *Policy {
 	return &Policy{approver: approver, yolo: yolo, sessionAllow: map[string]bool{}}
 }
 
-// Check gates a call to the named tool. A nil return means the call may
-// proceed; a non-nil return (typically wrapping ErrDenied) means it must
-// not run.
-func (p *Policy) Check(ctx context.Context, name string, risk RiskLevel, params json.RawMessage) error {
+// Check gates a call to the named tool. A nil error means the call may
+// proceed; a non-nil error (typically wrapping ErrDenied) means it must
+// not run. The returned Decision records what actually happened, for
+// persistence -- DecisionNotGated for a read-only or yolo-bypassed call
+// that was never actually put to the approver.
+func (p *Policy) Check(ctx context.Context, name string, risk RiskLevel, params json.RawMessage) (Decision, error) {
 	if risk == RiskReadOnly || p.yolo {
-		return nil
+		return DecisionNotGated, nil
 	}
 
 	p.mu.Lock()
 	allowed := p.sessionAllow[name]
 	p.mu.Unlock()
 	if allowed {
-		return nil
+		return DecisionAllowSession, nil
 	}
 
 	decision, feedback, err := p.approver.RequestApproval(ctx, ApprovalRequest{Tool: name, Params: params})
 	if err != nil {
-		return fmt.Errorf("tool: request approval for %s: %w", name, err)
+		return DecisionDeny, fmt.Errorf("tool: request approval for %s: %w", name, err)
 	}
 
 	switch decision {
 	case DecisionAllowOnce:
-		return nil
+		return DecisionAllowOnce, nil
 	case DecisionAllowSession:
 		p.mu.Lock()
 		p.sessionAllow[name] = true
 		p.mu.Unlock()
-		return nil
+		return DecisionAllowSession, nil
 	case DecisionDeny:
 		if feedback != "" {
-			return fmt.Errorf("%w: %s", ErrDenied, feedback)
+			return DecisionDeny, fmt.Errorf("%w: %s", ErrDenied, feedback)
 		}
-		return ErrDenied
+		return DecisionDeny, ErrDenied
+	case DecisionNotGated:
+		// An Approver must never return this -- it's Policy's own signal
+		// for calls it never put to a decision. Treat a misbehaving
+		// Approver the same as an explicit deny.
+		return DecisionDeny, ErrDenied
 	default:
-		return ErrDenied
+		return DecisionDeny, ErrDenied
 	}
 }

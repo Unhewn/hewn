@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/unhewn/hewn/internal/provider"
+	"github.com/unhewn/hewn/internal/session"
 	"github.com/unhewn/hewn/internal/tool"
 )
 
@@ -17,6 +19,10 @@ import (
 // than tool use. It owns its conversation history; Run must not be called
 // concurrently with itself (the history is only ever touched from within
 // a single in-flight Run's goroutine).
+//
+// Session and SessionID are optional: when Session is nil, persistence is
+// a no-op, which is what every existing test (and any caller that just
+// wants an in-memory loop) relies on.
 type Loop struct {
 	Provider  provider.Provider
 	Tools     *tool.Registry
@@ -24,6 +30,9 @@ type Loop struct {
 	Model     string
 	System    string
 	MaxTokens int
+
+	Session   *session.Store
+	SessionID string
 
 	history []provider.Message
 }
@@ -50,10 +59,9 @@ func (l *Loop) Run(ctx context.Context, userMsg string) <-chan Event {
 func (l *Loop) run(ctx context.Context, userMsg string, events chan<- Event) {
 	defer close(events)
 
-	l.history = append(l.history, provider.Message{
-		Role:    provider.RoleUser,
-		Content: []provider.ContentBlock{{Kind: provider.ContentText, Text: userMsg}},
-	})
+	userBlocks := []provider.ContentBlock{{Kind: provider.ContentText, Text: userMsg}}
+	l.history = append(l.history, provider.Message{Role: provider.RoleUser, Content: userBlocks})
+	l.persistMessage(ctx, provider.RoleUser, userBlocks, nil)
 
 	for {
 		stop, err := l.step(ctx, events)
@@ -88,9 +96,11 @@ func (l *Loop) step(ctx context.Context, events chan<- Event) (provider.StopReas
 	defer stream.Close()
 
 	var (
-		text  strings.Builder
-		calls []toolCall
-		stop  provider.StopReason
+		text      strings.Builder
+		calls     []toolCall
+		stop      provider.StopReason
+		usage     provider.Usage
+		usageSeen bool
 	)
 
 	for {
@@ -121,6 +131,8 @@ func (l *Loop) step(ctx context.Context, events chan<- Event) (provider.StopReas
 			}
 			events <- NewToolCallEnd(ev.ToolCallEnd.ID, ev.ToolCallEnd.Name, ev.ToolCallEnd.Input)
 		case provider.KindUsage:
+			usage = ev.Usage
+			usageSeen = true
 			events <- NewUsage(Usage{
 				InputTokens:      ev.Usage.InputTokens,
 				OutputTokens:     ev.Usage.OutputTokens,
@@ -133,30 +145,36 @@ func (l *Loop) step(ctx context.Context, events chan<- Event) (provider.StopReas
 		}
 	}
 
-	l.history = append(l.history, provider.Message{
-		Role:    provider.RoleAssistant,
-		Content: assistantContent(text.String(), calls),
-	})
+	assistantBlocks := assistantContent(text.String(), calls)
+	l.history = append(l.history, provider.Message{Role: provider.RoleAssistant, Content: assistantBlocks})
+
+	var sessUsage *session.Usage
+	if usageSeen {
+		sessUsage = &session.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens}
+	}
+	assistantMsg := l.persistMessage(ctx, provider.RoleAssistant, assistantBlocks, sessUsage)
 
 	if stop != provider.StopReasonToolUse || len(calls) == 0 {
 		return stop, nil
 	}
 
-	l.history = append(l.history, provider.Message{
-		Role:    provider.RoleUser,
-		Content: l.executeToolCalls(ctx, calls, events),
-	})
+	results := l.executeToolCalls(ctx, calls, events, assistantMsg.ID)
+	l.history = append(l.history, provider.Message{Role: provider.RoleUser, Content: results})
+	l.persistMessage(ctx, provider.RoleUser, results, nil)
+
 	return stop, nil
 }
 
 // executeToolCalls runs each call in order (matching the order the model
 // requested them), gating every call through the approval policy first,
-// and emits a ToolCallResult event for each.
-func (l *Loop) executeToolCalls(ctx context.Context, calls []toolCall, events chan<- Event) []provider.ContentBlock {
+// emits a ToolCallResult event for each, and persists each one against
+// messageID (the assistant message whose tool_use block requested it).
+func (l *Loop) executeToolCalls(ctx context.Context, calls []toolCall, events chan<- Event, messageID string) []provider.ContentBlock {
 	results := make([]provider.ContentBlock, 0, len(calls))
 	for _, c := range calls {
-		result := l.executeOne(ctx, c, events)
+		result, decision, duration := l.executeOne(ctx, c, events)
 		events <- NewToolCallResult(c.id, result.Output, result.IsError)
+		l.persistToolCall(ctx, messageID, c.name, c.input, result, decision, duration)
 		results = append(results, provider.ContentBlock{
 			Kind:              provider.ContentToolResult,
 			ToolResultID:      c.id,
@@ -167,14 +185,19 @@ func (l *Loop) executeToolCalls(ctx context.Context, calls []toolCall, events ch
 	return results
 }
 
-func (l *Loop) executeOne(ctx context.Context, c toolCall, events chan<- Event) tool.Result {
+// executeOne runs a single call, returning its result, the approval
+// decision that let it proceed (or DecisionNotGated if it never reached
+// approval at all, e.g. an unknown tool name), and how long Execute itself
+// took (zero if Execute never ran).
+func (l *Loop) executeOne(ctx context.Context, c toolCall, events chan<- Event) (tool.Result, tool.Decision, time.Duration) {
 	t, ok := l.Tools.Get(c.name)
 	if !ok {
-		return tool.Result{Output: fmt.Sprintf("unknown tool %q", c.name), IsError: true}
+		return tool.Result{Output: fmt.Sprintf("unknown tool %q", c.name), IsError: true}, tool.DecisionNotGated, 0
 	}
 
-	if err := l.Approval.Check(ctx, c.name, t.Risk(), c.input); err != nil {
-		return tool.Result{Output: err.Error(), IsError: true}
+	decision, err := l.Approval.Check(ctx, c.name, t.Risk(), c.input)
+	if err != nil {
+		return tool.Result{Output: err.Error(), IsError: true}, decision, 0
 	}
 
 	input := c.input
@@ -182,11 +205,13 @@ func (l *Loop) executeOne(ctx context.Context, c toolCall, events chan<- Event) 
 		input = json.RawMessage("{}")
 	}
 
+	start := time.Now()
 	result, err := t.Execute(ctx, input, toolIOAdapter{id: c.id, events: events})
+	duration := time.Since(start)
 	if err != nil {
-		return tool.Result{Output: err.Error(), IsError: true}
+		return tool.Result{Output: err.Error(), IsError: true}, decision, duration
 	}
-	return result
+	return result, decision, duration
 }
 
 func (l *Loop) toolDefs() []provider.ToolDef {
@@ -200,6 +225,97 @@ func (l *Loop) toolDefs() []provider.ToolDef {
 		})
 	}
 	return defs
+}
+
+// persistMessage appends one message to the session store and bumps its
+// updated_at, if persistence is configured. It returns the created
+// session.Message (the zero value when persistence is off, or when the
+// write itself fails), so callers can attach tool_calls to the right
+// message ID. Persistence failures degrade silently rather than aborting
+// the turn: the conversation itself succeeded regardless of whether its
+// bookkeeping write did.
+func (l *Loop) persistMessage(ctx context.Context, role provider.Role, content []provider.ContentBlock, usage *session.Usage) session.Message {
+	if l.Session == nil {
+		return session.Message{}
+	}
+
+	raw, err := json.Marshal(content)
+	if err != nil {
+		return session.Message{}
+	}
+
+	msg, err := l.Session.AppendMessage(ctx, l.SessionID, sessionRole(role), raw, usage)
+	if err != nil {
+		return session.Message{}
+	}
+	_ = l.Session.Touch(ctx, l.SessionID)
+	return msg
+}
+
+// persistToolCall records one tool invocation against messageID, if
+// persistence is configured. Best-effort, like persistMessage.
+func (l *Loop) persistToolCall(
+	ctx context.Context,
+	messageID, toolName string,
+	params json.RawMessage,
+	result tool.Result,
+	decision tool.Decision,
+	duration time.Duration,
+) {
+	if l.Session == nil || messageID == "" {
+		return
+	}
+
+	var approved *int
+	if decision != tool.DecisionNotGated {
+		v := int(decision)
+		approved = &v
+	}
+
+	_, _ = l.Session.AppendToolCall(ctx, messageID, toolName, params, result.Output, result.IsError, approved, duration)
+}
+
+func sessionRole(r provider.Role) session.Role {
+	switch r {
+	case provider.RoleUser:
+		return session.RoleUser
+	case provider.RoleAssistant:
+		return session.RoleAssistant
+	default:
+		return session.RoleUser
+	}
+}
+
+func providerRole(r session.Role) provider.Role {
+	switch r {
+	case session.RoleAssistant:
+		return provider.RoleAssistant
+	case session.RoleUser, session.RoleTool, session.RoleSystem:
+		return provider.RoleUser
+	default:
+		return provider.RoleUser
+	}
+}
+
+// SeedHistory replaces the loop's conversation history. For resuming a
+// persisted session; must be called before the first Run.
+func (l *Loop) SeedHistory(history []provider.Message) {
+	l.history = history
+}
+
+// HistoryFromMessages reconstructs provider.Message history from persisted
+// session.Message rows, reversing the JSON encoding persistMessage uses.
+// Pairs with SeedHistory to resume a session.
+func HistoryFromMessages(messages []session.Message) ([]provider.Message, error) {
+	history := make([]provider.Message, 0, len(messages))
+	for _, m := range messages {
+		var blocks []provider.ContentBlock
+		if err := json.Unmarshal(m.Content, &blocks); err != nil {
+			return nil, fmt.Errorf("agent: decode stored message %s: %w", m.ID, err)
+		}
+		history = append(history, provider.Message{Role: providerRole(m.Role), Content: blocks})
+	}
+	return history, nil
 }
 
 // assistantContent builds the assistant message content blocks for one

@@ -40,17 +40,22 @@ func (s *fakeStream) Close() error { return nil }
 // fakeProvider returns one scripted turn (slice of events) per call to
 // Stream, in order.
 type fakeProvider struct {
-	mu    sync.Mutex
-	turns [][]provider.Event
-	call  int
-	block bool // if true, every Stream call blocks until ctx.Done()
+	mu          sync.Mutex
+	turns       [][]provider.Event
+	call        int
+	block       bool // if true, every Stream call blocks until ctx.Done()
+	lastRequest provider.Request
 }
 
 func (p *fakeProvider) Name() string { return "fake" }
 
 func (p *fakeProvider) Models(context.Context) ([]provider.ModelInfo, error) { return nil, nil }
 
-func (p *fakeProvider) Stream(ctx context.Context, _ provider.Request) (provider.Stream, error) {
+func (p *fakeProvider) Stream(ctx context.Context, req provider.Request) (provider.Stream, error) {
+	p.mu.Lock()
+	p.lastRequest = req
+	p.mu.Unlock()
+
 	if p.block {
 		return &fakeStream{ctx: ctx, block: true}, nil
 	}
