@@ -12,7 +12,6 @@ import (
 func Register(reg *Registry) {
 	reg.Register(helpCommand())
 	reg.Register(modelCommand())
-	reg.Register(providerCommand())
 	reg.Register(setupCommand())
 	reg.Register(newCommand())
 	reg.Register(clearCommand())
@@ -40,10 +39,10 @@ func helpCommand() Command {
 func modelCommand() Command {
 	return Command{
 		Name:        "model",
-		Description: "show or set the model for subsequent turns",
+		Description: "show or set the model for subsequent turns (e.g. /model claude-sonnet-4-20250514, /model gpt-4o, /model gemma4:12b)",
 		Run: func(_ context.Context, c *Context, args string) Result {
 			if args == "" {
-				return Result{Output: fmt.Sprintf("current model: %s", c.Loop.Model)}
+				return Result{Output: fmt.Sprintf("current model: %s\nchange it with: /model <name>\ne.g. /model claude-sonnet-4-20250514  /model gpt-4o  /model gemma4:12b", c.Loop.Model)}
 			}
 			c.Loop.Model = args
 			return Result{Output: fmt.Sprintf("model set to %s", args)}
@@ -51,28 +50,12 @@ func modelCommand() Command {
 	}
 }
 
-func providerCommand() Command {
-	return Command{
-		Name:        "provider",
-		Description: "show the current provider",
-		Run: func(_ context.Context, c *Context, args string) Result {
-			if c.ProviderName == "" {
-				return Result{Output: "provider: not set (check config)"}
-			}
-			s := fmt.Sprintf("current provider: %s (model: %s)\n", c.ProviderName, c.Loop.Model)
-			s += "available: anthropic, openai\n"
-			s += "to switch: edit ~/.config/hewn/config.yaml or run 'hewn --setup' outside Hewn, then /new"
-			return Result{Output: s}
-		},
-	}
-}
-
 func setupCommand() Command {
 	return Command{
 		Name:        "setup",
-		Description: "show how to reconfigure Hewn",
+		Description: "reconfigure Hewn (provider, model, name)",
 		Run: func(_ context.Context, _ *Context, _ string) Result {
-			return Result{Output: "To reconfigure Hewn:\n  1. Exit this session (ctrl+c twice or /quit)\n  2. Run: hewn --setup\n  3. The setup wizard will walk you through choosing a provider and model.\n  Your name and other preferences will be remembered."}
+			return Result{Output: "To reconfigure Hewn:\n  1. Exit this session (ctrl+c twice or /quit)\n  2. Run: hewn --setup\n  3. The wizard will walk you through picking a model, API key, and name."}
 		},
 	}
 }

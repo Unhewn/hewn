@@ -153,7 +153,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&flagNoTools, "no-tools", false, "disable tool use")
 	rootCmd.Flags().BoolVar(&flagYolo, "yolo", false, "pre-approve every tool call for this run")
 	rootCmd.Flags().StringP("prompt", "p", "", "run a prompt headless and exit")
-	rootCmd.Flags().Bool("setup", false, "run the setup wizard to reconfigure provider, model, and preferences")
+	rootCmd.Flags().Bool("setup", false, "run the setup wizard to pick a model, API key, and name")
 	rootCmd.Flags().Bool("list", false, "list recent sessions and exit")
 	rootCmd.Flags().String("resume", "", `resume a session: bare flag resumes the most recent, or --resume=<id-or-prefix> for a specific one (the = is required)`)
 	rootCmd.Flags().Lookup("resume").NoOptDefVal = resumeLatest

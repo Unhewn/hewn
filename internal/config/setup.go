@@ -221,7 +221,7 @@ var presets = []preset{
 	},
 	{
 		Name:        "Manual",
-		Description: "Skip the wizard. You'll need to set up provider, model, and credentials yourself.",
+		Description: "Skip the wizard. Configure model, API key, and everything else yourself in ~/.config/hewn/config.yaml.",
 		Provider:    "",
 	},
 }
@@ -233,13 +233,13 @@ func runWizard(cfg *Config) (WizardResult, error) {
 	fmt.Println("  ╭─────────────────────────────────────╮")
 	fmt.Println("  │                                     │")
 	fmt.Println("  │   Welcome to Hewn!                  │")
-	fmt.Println("  │   Let's get you set up.             │")
+	fmt.Println("  │   Pick a model to get started.      │")
 	fmt.Println("  │                                     │")
 	fmt.Println("  ╰─────────────────────────────────────╯")
 	fmt.Println()
 
-	// Pick a provider.
-	fmt.Println("  Choose a provider:")
+	// Pick a model.
+	fmt.Println("  What model do you want to use?")
 	fmt.Println()
 	for i, p := range presets {
 		fmt.Printf("  %d. %s\n", i+1, p.Name)
