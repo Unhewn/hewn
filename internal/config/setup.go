@@ -3,7 +3,9 @@ package config
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,8 +306,39 @@ func runWizard(cfg *Config) (WizardResult, error) {
 		fmt.Println()
 	} else if picked.IsLocal {
 		fmt.Println("  Checking for Ollama...")
-		// Non-blocking check: if Ollama responds, great; if not, warn but proceed.
-		fmt.Println("  (Ollama detected — no API key needed.)")
+		// Try to detect installed models.
+		installed, err := fetchOllamaModels()
+		if err == nil && len(installed) > 0 {
+			fmt.Printf("  Found %d model(s):\n", len(installed))
+			fmt.Println()
+			for i, m := range installed {
+				mark := " "
+				if m == model {
+					mark = "›"
+				}
+				fmt.Printf("  %s %d. %s\n", mark, i+1, m)
+			}
+			fmt.Println()
+			fmt.Printf("  Pick a model [1], or type a name: ")
+			line, _ := r.ReadString('\n')
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" {
+				// Check if it's a number matching the list.
+				var n int
+				if _, err := fmt.Sscanf(trimmed, "%d", &n); err == nil && n >= 1 && n <= len(installed) {
+					model = installed[n-1]
+				} else {
+					model = trimmed // custom name
+				}
+			}
+		} else {
+			fmt.Printf("  Couldn't reach Ollama. Make sure it's running.\n")
+			fmt.Printf("  Model [%s]: ", model)
+			line, _ := r.ReadString('\n')
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				model = trimmed
+			}
+		}
 		fmt.Println()
 	}
 
@@ -384,4 +417,30 @@ func ApplyEnv(cfg Config) {
 			os.Setenv("OPENAI_BASE_URL", cfg.BaseURL)
 		}
 	}
+}
+
+// fetchOllamaModels calls the local Ollama API to list installed models.
+// Returns nil on any failure (Ollama not running, parse error, etc.) so
+// callers can fall through to a manual prompt.
+func fetchOllamaModels() ([]string, error) {
+	resp, err := http.Get("http://localhost:11434/api/tags")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0, len(result.Models))
+	for _, m := range result.Models {
+		names = append(names, m.Name)
+	}
+	return names, nil
 }

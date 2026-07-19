@@ -12,6 +12,7 @@ import (
 func Register(reg *Registry) {
 	reg.Register(helpCommand())
 	reg.Register(modelCommand())
+	reg.Register(modelsCommand())
 	reg.Register(setupCommand())
 	reg.Register(newCommand())
 	reg.Register(clearCommand())
@@ -56,6 +57,32 @@ func setupCommand() Command {
 		Description: "reconfigure Hewn (provider, model, name)",
 		Run: func(_ context.Context, _ *Context, _ string) Result {
 			return Result{Output: "To reconfigure Hewn:\n  1. Exit this session (ctrl+c twice or /quit)\n  2. Run: hewn --setup\n  3. The wizard will walk you through picking a model, API key, and name."}
+		},
+	}
+}
+
+func modelsCommand() Command {
+	return Command{
+		Name:        "models",
+		Description: "list models available from the current provider",
+		Run: func(ctx context.Context, c *Context, _ string) Result {
+			if c.Loop == nil || c.Loop.Provider == nil {
+				return Result{Output: "no provider configured"}
+			}
+			models, err := c.Loop.Provider.Models(ctx)
+			if err != nil {
+				return Result{Output: fmt.Sprintf("error listing models: %v", err)}
+			}
+			if len(models) == 0 {
+				return Result{Output: "no models reported by the provider"}
+			}
+			var b strings.Builder
+			b.WriteString(fmt.Sprintf("models available at %s:\n", c.ProviderName))
+			for _, m := range models {
+				b.WriteString("  " + m.ID + "\n")
+			}
+			b.WriteString("\nswitch with: /model <name>")
+			return Result{Output: strings.TrimRight(b.String(), "\n")}
 		},
 	}
 }

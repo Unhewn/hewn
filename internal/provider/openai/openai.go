@@ -68,7 +68,7 @@ func (c *Client) Models(ctx context.Context) ([]provider.ModelInfo, error) {
 		return nil, fmt.Errorf("openai: models request: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, apiError(resp)
+		return nil, c.apiError(resp)
 	}
 	defer resp.Body.Close()
 
@@ -109,7 +109,7 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (provider.Str
 		return nil, fmt.Errorf("openai: stream request: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, apiError(resp)
+		return nil, c.apiError(resp)
 	}
 
 	return newChunkStream(resp.Body), nil
@@ -122,14 +122,33 @@ func (c *Client) setHeaders(req *http.Request) {
 }
 
 // apiError reads and closes resp.Body, translating a non-200 response
-// into an error. Callers must not also close resp.Body.
-func apiError(resp *http.Response) error {
+// into an error. Callers must not also close resp.Body. When a model-not-found
+// error is detected, it tries to list available models to give a helpful message.
+func (c *Client) apiError(resp *http.Response) error {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 
+	var msg string
 	var wireErr wireAPIError
 	if err := json.Unmarshal(body, &wireErr); err == nil && wireErr.Error.Message != "" {
-		return fmt.Errorf("openai: %s: %s", resp.Status, wireErr.Error.Message)
+		msg = fmt.Sprintf("openai: %s: %s", resp.Status, wireErr.Error.Message)
+	} else {
+		msg = fmt.Sprintf("openai: %s: %s", resp.Status, string(body))
 	}
-	return fmt.Errorf("openai: %s: %s", resp.Status, string(body))
+
+	// If it looks like a model-not-found error, try to list available models.
+	if resp.StatusCode == 404 && strings.Contains(strings.ToLower(msg), "model") &&
+		(strings.Contains(strings.ToLower(msg), "not found") || strings.Contains(strings.ToLower(msg), "not supported")) {
+		models, err := c.Models(context.Background())
+		if err == nil && len(models) > 0 {
+			names := make([]string, len(models))
+			for i, m := range models {
+				names[i] = m.ID
+			}
+			msg += "\navailable models: " + strings.Join(names, ", ")
+			msg += "\nto switch: /model <name> from inside Hewn, or pick a different one in the setup wizard"
+		}
+	}
+
+	return fmt.Errorf("%s", msg)
 }
