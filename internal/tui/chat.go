@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // itemKind identifies which fields of a transcriptItem are meaningful.
@@ -94,11 +95,17 @@ func newGlamourRenderer(width int) *glamour.TermRenderer {
 	return r
 }
 
+// indent is the left padding applied to every line of the transcript.
+const indent = "  "
+
 // renderTranscript renders every item into the string handed to
 // viewport.SetContent. expandToolCallID, if non-empty, is the ID of the
 // one tool call (always the most recent, per the session-5 scope trim) to
 // render expanded; every other tool call always renders collapsed.
-func renderTranscript(items []transcriptItem, expandToolCallID string) string {
+func renderTranscript(items []transcriptItem, expandToolCallID, userName string) string {
+	if userName == "" {
+		userName = "you"
+	}
 	var b strings.Builder
 	for i, item := range items {
 		if i > 0 {
@@ -106,27 +113,28 @@ func renderTranscript(items []transcriptItem, expandToolCallID string) string {
 		}
 		switch item.kind {
 		case itemUser:
-			b.WriteString(styleUser.Render("you  ") + item.text)
+			label := styleUser.Render(userName + "  ")
+			// Indent continuation lines of multi-line user messages.
+			text := strings.ReplaceAll(item.text, "\n", "\n"+strings.Repeat(" ", lipgloss.Width(label)))
+			b.WriteString(indent + label + text)
 		case itemSystem:
-			b.WriteString(styleSystem.Render(item.text))
+			b.WriteString(indent + styleSystem.Render(item.text))
 		case itemAssistant:
 			if item.closed {
-				b.WriteString(item.rendered)
+				b.WriteString(indent + item.rendered)
 			} else {
-				b.WriteString(item.raw.String())
+				b.WriteString(indent + item.raw.String())
 			}
 		case itemToolCall:
-			b.WriteString(renderToolCall(item.tool, item.tool.id == expandToolCallID && expandToolCallID != ""))
+			b.WriteString(indent + renderToolCall(item.tool, item.tool.id == expandToolCallID && expandToolCallID != ""))
 		}
 	}
 	return b.String()
 }
 
-// renderToolCall renders one tool call. Once done, the final
-// ToolCallResult (t.result) is the authoritative content -- some tools
-// (e.g. read) never stream anything via ToolOutput events at all, so
-// their entire output only ever arrives there; t.output (the live tail)
-// is only shown while the call is still running.
+// renderToolCall renders one tool call. In collapsed view (the default)
+// it shows only the tool name and status -- no raw JSON params. Expand
+// with ctrl+o to see the full input and output.
 func renderToolCall(t *toolCallItem, expanded bool) string {
 	status := "●"
 	switch {
@@ -137,9 +145,6 @@ func renderToolCall(t *toolCallItem, expanded bool) string {
 	}
 
 	head := fmt.Sprintf("%s %s", status, styleToolName.Render(t.name))
-	if t.input != "" {
-		head += " " + t.input
-	}
 
 	if !expanded {
 		switch {
@@ -148,20 +153,27 @@ func renderToolCall(t *toolCallItem, expanded bool) string {
 		case t.result != "":
 			lines := strings.Count(strings.TrimRight(t.result, "\n"), "\n") + 1
 			head += fmt.Sprintf("  [%d lines ▸]", lines)
+		default:
+			head += "  [done]"
 		}
 		return head
 	}
 
+	// Expanded: show input params and output.
 	var b strings.Builder
 	b.WriteString(head)
+	if t.input != "" {
+		b.WriteString(" ")
+		b.WriteString(t.input)
+	}
 	b.WriteString("\n")
 	switch {
 	case !t.done:
-		b.WriteString(t.output.String())
+		b.WriteString(indent + t.output.String())
 	case t.isError:
-		b.WriteString(styleToolError.Render(t.result))
+		b.WriteString(indent + styleToolError.Render(t.result))
 	default:
-		b.WriteString(t.result)
+		b.WriteString(indent + t.result)
 	}
 	return b.String()
 }

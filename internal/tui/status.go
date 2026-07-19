@@ -31,12 +31,12 @@ func (s appState) String() string {
 	}
 }
 
-// renderStatusBar shows model / cumulative tokens / cwd / state, per
+// renderStatusBar shows model / cumulative tokens / cwd / state / activity, per
 // HEWN.md §4's mockup.
-func renderStatusBar(width int, model, cwd string, usage agent.Usage, state appState) string {
+func renderStatusBar(width int, model, cwd string, usage agent.Usage, state appState, activity string) string {
 	totalTok := usage.InputTokens + usage.OutputTokens
 	left := fmt.Sprintf(" hewn · %s · %s · %.1fk tok ", model, cwd, float64(totalTok)/1000)
-	right := fmt.Sprintf(" %s ", state)
+	right := fmt.Sprintf(" %s%s ", activity, state)
 
 	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
 	if pad < 0 {

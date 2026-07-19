@@ -32,7 +32,7 @@ func newTestModel(t *testing.T) Model {
 	}
 	registry := newTestSlashRegistry()
 	slashCtx := &slash.Context{Loop: loop, Tools: tools, Registry: registry, CWD: "/repo", ProviderName: "fake"}
-	return NewModel(loop, NewApprover(), slashCtx, "/repo", "fake")
+	return NewModel(loop, NewApprover(), slashCtx, "/repo", "fake", "you")
 }
 
 func asModel(t *testing.T, tm tea.Model) Model {
@@ -243,7 +243,7 @@ func TestUpdate_ClearTranscriptWipesDisplay(t *testing.T) {
 	})
 	loop := &agent.Loop{Tools: tool.NewRegistry(), Approval: tool.NewPolicy(nil, true), Model: "test-model"}
 	slashCtx := &slash.Context{Loop: loop, Registry: reg}
-	m := NewModel(loop, NewApprover(), slashCtx, "/repo", "fake")
+	m := NewModel(loop, NewApprover(), slashCtx, "/repo", "fake", "you")
 	m.transcript = []transcriptItem{newUserItem("old message")}
 	m.input.SetValue("/wipe")
 

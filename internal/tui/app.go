@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -46,12 +47,14 @@ type Model struct {
 	approver     *Approver
 	cwd          string
 	providerName string
+	userName     string
 
 	slashRegistry *slash.Registry
 	slashCtx      *slash.Context
 
 	viewport viewport.Model
 	input    textarea.Model
+	spinner  spinner.Model
 	width    int
 	height   int
 
@@ -74,28 +77,34 @@ type Model struct {
 // is built by the caller too (it needs a *session.Store, which this
 // package must never import -- AGENTS.md invariant #1, "the TUI never
 // touches the database").
-func NewModel(loop *agent.Loop, approver *Approver, slashCtx *slash.Context, cwd, providerName string) Model {
+func NewModel(loop *agent.Loop, approver *Approver, slashCtx *slash.Context, cwd, providerName, userName string) Model {
 	vp := viewport.New(80, 20)
 	vp.MouseWheelEnabled = true
 	vp.SetContent(styleSystem.Render("Welcome to hewn! Type a message, or /help for commands."))
+
+	s := spinner.New()
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	s.Spinner = spinner.Dot
 
 	return Model{
 		loop:            loop,
 		approver:        approver,
 		cwd:             cwd,
 		providerName:    providerName,
+		userName:        userName,
 		slashRegistry:   slashCtx.Registry,
 		slashCtx:        slashCtx,
 		viewport:        vp,
 		input:           newInput(),
+		spinner:         s,
 		glamourRenderer: newGlamourRenderer(80),
 	}
 }
 
 // Start runs the TUI to completion. approver must be the same value
 // passed as buildLoop's approver argument when loop was constructed.
-func Start(loop *agent.Loop, approver *Approver, slashCtx *slash.Context, cwd, providerName string) error {
-	m := NewModel(loop, approver, slashCtx, cwd, providerName)
+func Start(loop *agent.Loop, approver *Approver, slashCtx *slash.Context, cwd, providerName, userName string) error {
+	m := NewModel(loop, approver, slashCtx, cwd, providerName, userName)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
@@ -136,7 +145,7 @@ func tick() tea.Cmd {
 // arrive from the very first turn, before any tick or event has ever
 // fired.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, waitForApproval(m.approver.requests))
+	return tea.Batch(textarea.Blink, waitForApproval(m.approver.requests), m.spinner.Tick)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -174,7 +183,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flush()
 		}
 		if m.state == stateStreaming {
-			return m, tick()
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, tea.Batch(tick(), cmd)
+		}
+		return m, nil
+
+	case spinner.TickMsg:
+		if m.state == stateStreaming {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
 		}
 		return m, nil
 	}
@@ -292,7 +311,7 @@ func (m Model) startTurnOrDispatch() (tea.Model, tea.Cmd) {
 	m.events = m.loop.Run(ctx, text)
 	m.state = stateStreaming
 
-	return m, tea.Batch(waitForEvent(m.events), tick())
+	return m, tea.Batch(waitForEvent(m.events), tick(), m.spinner.Tick)
 }
 
 // handleAgentEvent applies one agent.Event to the transcript. Cheap
@@ -405,14 +424,21 @@ func (m *Model) toggleExpand() {
 // partial buffer is never lost), and anywhere the transcript changes
 // outside the streaming path (dispatch, resize, expand toggle).
 func (m *Model) flush() {
-	m.viewport.SetContent(renderTranscript(m.transcript, m.expandedToolCallID))
+	m.viewport.SetContent(renderTranscript(m.transcript, m.expandedToolCallID, m.userName))
 	m.viewport.GotoBottom()
 	m.dirty = false
 }
 
 func (m Model) View() string {
 	header := styleHeader.Render("hewn — minimalist agent harness")
-	status := renderStatusBar(m.width, m.loop.Model, m.cwd, m.loop.TotalUsage(), m.state)
+
+	// Activity indicator: spinner when thinking, idle otherwise.
+	activity := ""
+	if m.state == stateStreaming {
+		activity = m.spinner.View() + " "
+	}
+
+	status := renderStatusBar(m.width, m.loop.Model, m.cwd, m.loop.TotalUsage(), m.state, activity)
 	help := styleHelp.Render("PgUp/PgDn or mouse wheel scroll • Enter send • /command • ctrl+o expand • ctrl+c interrupt/quit")
 
 	sections := []string{header, m.viewport.View()}

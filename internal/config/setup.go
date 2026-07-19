@@ -17,6 +17,7 @@ type WizardResult struct {
 	Model    string
 	APIKey   string
 	BaseURL  string
+	Name     string
 }
 
 // CheckOrSetup checks whether a usable provider is configured (has the
@@ -57,6 +58,19 @@ func CheckOrSetup(cfg *Config, isHeadless bool) (*Config, error) {
 		newCfg.BaseURL = result.BaseURL
 	}
 
+	// Read existing config first (if any) so we don't overwrite a saved name
+	// when re-running the wizard.
+	existingPath := userConfigPath()
+	if existing, err := os.ReadFile(existingPath); err == nil {
+		var existingCfg Config
+		if yaml.Unmarshal(existing, &existingCfg) == nil && existingCfg.Name != "" {
+			newCfg.Name = existingCfg.Name
+		}
+	}
+	if newCfg.Name == "" && result.Name != "" {
+		newCfg.Name = result.Name
+	}
+
 	if err := writeUserConfig(newCfg); err != nil {
 		return cfg, fmt.Errorf("hewn: save config: %w", err)
 	}
@@ -72,6 +86,44 @@ func CheckOrSetup(cfg *Config, isHeadless bool) (*Config, error) {
 		return cfg, err
 	}
 	return &loaded, nil
+}
+
+// ForceSetup runs the setup wizard even if a provider is already configured.
+// Returns the new config after the wizard completes and writes it to disk.
+func ForceSetup() (*Config, error) {
+	cfg, err := Load("")
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := runWizard(&cfg)
+	if err != nil {
+		return nil, fmt.Errorf("hewn: setup: %w", err)
+	}
+
+	newCfg := Config{
+		Provider: result.Provider,
+		Model:    result.Model,
+	}
+	if result.APIKey != "" {
+		newCfg.APIKey = result.APIKey
+	}
+	if result.BaseURL != "" {
+		newCfg.BaseURL = result.BaseURL
+	}
+	if result.Name != "" {
+		newCfg.Name = result.Name
+	}
+
+	if err := writeUserConfig(newCfg); err != nil {
+		return nil, fmt.Errorf("hewn: save config: %w", err)
+	}
+
+	fmt.Printf("\n  Config saved to %s\n", userConfigPath())
+	fmt.Println("  Run 'hewn' again to start with the new configuration.")
+	fmt.Println()
+
+	return &newCfg, nil
 }
 
 // ready returns true if cfg's provider has the credentials it needs to
@@ -164,7 +216,7 @@ var presets = []preset{
 		Name:        "Other OpenAI-compatible",
 		Description: "Any OpenAI-compatible backend — llama.cpp, LM Studio, Groq, Together, etc.",
 		Provider:    "openai",
-		Model:       "", // ask
+		Model:       "",    // ask
 		NeedsKey:    false, // optional, depends on backend
 	},
 	{
@@ -272,6 +324,19 @@ func runWizard(cfg *Config) (WizardResult, error) {
 		fmt.Println()
 	}
 
+	// Ask for their name (default to current value or "you").
+	defaultName := cfg.Name
+	if defaultName == "" {
+		defaultName = "you"
+	}
+	fmt.Printf("  What should I call you? [%s]: ", defaultName)
+	line, _ = r.ReadString('\n')
+	userName := strings.TrimSpace(line)
+	if userName == "" {
+		userName = defaultName
+	}
+	fmt.Println()
+
 	fmt.Println("  Setup complete! Starting Hewn...")
 	fmt.Println()
 
@@ -280,6 +345,7 @@ func runWizard(cfg *Config) (WizardResult, error) {
 		Model:    model,
 		APIKey:   apiKey,
 		BaseURL:  baseURL,
+		Name:     userName,
 	}, nil
 }
 

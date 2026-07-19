@@ -28,6 +28,7 @@ type Config struct {
 	Yolo     bool   `yaml:"yolo"`
 	APIKey   string `yaml:"api-key,omitempty"`
 	BaseURL  string `yaml:"base-url,omitempty"`
+	Name     string `yaml:"name,omitempty"`
 }
 
 // Load layered configuration: user config first, then project config
@@ -172,6 +173,9 @@ func merge(dst *Config, src Config) {
 	}
 	if src.BaseURL != "" {
 		dst.BaseURL = src.BaseURL
+	}
+	if src.Name != "" {
+		dst.Name = src.Name
 	}
 }
 

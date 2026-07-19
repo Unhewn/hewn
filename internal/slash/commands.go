@@ -12,6 +12,8 @@ import (
 func Register(reg *Registry) {
 	reg.Register(helpCommand())
 	reg.Register(modelCommand())
+	reg.Register(providerCommand())
+	reg.Register(setupCommand())
 	reg.Register(newCommand())
 	reg.Register(clearCommand())
 	reg.Register(compactCommand())
@@ -45,6 +47,32 @@ func modelCommand() Command {
 			}
 			c.Loop.Model = args
 			return Result{Output: fmt.Sprintf("model set to %s", args)}
+		},
+	}
+}
+
+func providerCommand() Command {
+	return Command{
+		Name:        "provider",
+		Description: "show the current provider",
+		Run: func(_ context.Context, c *Context, args string) Result {
+			if c.ProviderName == "" {
+				return Result{Output: "provider: not set (check config)"}
+			}
+			s := fmt.Sprintf("current provider: %s (model: %s)\n", c.ProviderName, c.Loop.Model)
+			s += "available: anthropic, openai\n"
+			s += "to switch: edit ~/.config/hewn/config.yaml or run 'hewn --setup' outside Hewn, then /new"
+			return Result{Output: s}
+		},
+	}
+}
+
+func setupCommand() Command {
+	return Command{
+		Name:        "setup",
+		Description: "show how to reconfigure Hewn",
+		Run: func(_ context.Context, _ *Context, _ string) Result {
+			return Result{Output: "To reconfigure Hewn:\n  1. Exit this session (ctrl+c twice or /quit)\n  2. Run: hewn --setup\n  3. The setup wizard will walk you through choosing a provider and model.\n  Your name and other preferences will be remembered."}
 		},
 	}
 }

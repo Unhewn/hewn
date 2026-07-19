@@ -55,6 +55,11 @@ func main() {
 				return runList(cmd)
 			}
 
+			setup, _ := cmd.Flags().GetBool("setup")
+			if setup {
+				return runSetup(cmd)
+			}
+
 			// --- Load layered config ---
 			cfg, err := config.Load("") // user-level only; cwd unknown yet
 			if err != nil {
@@ -148,6 +153,7 @@ func main() {
 	rootCmd.Flags().BoolVar(&flagNoTools, "no-tools", false, "disable tool use")
 	rootCmd.Flags().BoolVar(&flagYolo, "yolo", false, "pre-approve every tool call for this run")
 	rootCmd.Flags().StringP("prompt", "p", "", "run a prompt headless and exit")
+	rootCmd.Flags().Bool("setup", false, "run the setup wizard to reconfigure provider, model, and preferences")
 	rootCmd.Flags().Bool("list", false, "list recent sessions and exit")
 	rootCmd.Flags().String("resume", "", `resume a session: bare flag resumes the most recent, or --resume=<id-or-prefix> for a specific one (the = is required)`)
 	rootCmd.Flags().Lookup("resume").NoOptDefVal = resumeLatest
@@ -496,5 +502,22 @@ func runTUI(cmd *cobra.Command, cfg *config.Config) error {
 	}
 	registerSkills(registry, b.loop.Tools, b.cwd, b.loop.System)
 
-	return tui.Start(b.loop, approver, slashCtx, b.cwd, b.providerName)
+	return tui.Start(b.loop, approver, slashCtx, b.cwd, b.providerName, cfg.Name)
+}
+
+// runSetup forces the setup wizard to re-run. It ignores the current
+// provider and walks the user through choosing a new one.
+func runSetup(cmd *cobra.Command) error {
+	// If --db was explicitly passed, we don't need it for setup, but note
+	// it since the new config won't touch it.
+	cfg, err := config.ForceSetup()
+	if err != nil {
+		return fmt.Errorf("hewn: %w", err)
+	}
+
+	// Apply config env vars in case the user picked a provider that needs them.
+	config.ApplyEnv(*cfg)
+
+	_ = cmd // unused in setup mode
+	return nil
 }

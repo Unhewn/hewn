@@ -112,7 +112,7 @@ func TestRenderTranscript_ExpandsOnlyTheGivenID(t *testing.T) {
 	b.tool.done = true
 	b.tool.result = "output line"
 
-	out := renderTranscript([]transcriptItem{a, b}, "t2")
+	out := renderTranscript([]transcriptItem{a, b}, "t2", "you")
 
 	if strings.Contains(out, "line one") {
 		t.Error("non-expanded tool call t1 rendered its full content")
