@@ -364,6 +364,11 @@ Already built ahead of v0.2 deadline:
 - ✓ OpenAI-compatible provider (covers Ollama, llama.cpp, LM Studio, Nous, OpenAI itself)
 - ✓ Declarative skills (`.hewn/skills/*.md` with YAML front matter)
 - ✓ MCP client (`.hewn/mcp.json` server declarations)
+- ✓ Dollar cost accounting (`internal/pricing`): a pre-flight estimate before
+  a turn is sent (exact input-token count via Anthropic's `count_tokens`
+  endpoint, approximate for OpenAI-compatible backends), a running session
+  total in the status bar, and `/cost`'s real $ breakdown, not just token
+  counts
 
 ### Next: start dogfooding
 
@@ -387,7 +392,7 @@ The "self-hosting" milestone is already reachable — Hewn can read its own sour
 - Schema versioning + migrations
 - The event type union (it becomes the extension ABI)
 - Cancellation plumbed through every layer
-- Token accounting + cost display (you will want this on day two)
+- ✓ Token accounting + cost display (you will want this on day two) — done, see above
 - Structured logging to a file, off by default, `--debug` to enable
 
 ---

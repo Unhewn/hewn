@@ -140,6 +140,14 @@ Every session's system prompt is assembled from `AGENTS.md` files, no flag neede
 
 A missing file at any level is normal and silent. A file that exists but can't be read is reported as a warning on startup, not a fatal error.
 
+## Cost tracking
+
+Before each turn is sent, Hewn shows a rough dollar estimate for it in the transcript: an exact input-token count for the Anthropic provider (via its `count_tokens` endpoint, at no cost), an approximation for OpenAI-compatible backends (no such endpoint exists generically). The estimate always prices input tokens at the full rate, never crediting a prompt-cache discount — Hewn has no way to know ahead of time whether a request will actually hit cache, so the number shown is the worst case you'd actually pay, not an optimistic guess.
+
+The status bar's `$` figure and `/cost`'s breakdown are the real, reconciled total — computed from each turn's actual reported usage (including real cache read/write savings), not the pre-flight estimate.
+
+Both are silently omitted for a model Hewn doesn't have pricing for — a local Ollama/llama.cpp model, or a hosted model newer than Hewn's own pricing table (`internal/pricing`, updated by hand; there's no live pricing endpoint to read it from). No `$` figure at all means "unknown," never a fabricated `$0.00`.
+
 ## Skills
 
 Skills are declarative Markdown+front-matter command bundles — a system prompt plus an optional allowed-tool subset, invoked as an ordinary slash command. They're only available in `--interactive` and TUI sessions, not headless (`-p`) runs.
