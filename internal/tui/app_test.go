@@ -3,9 +3,11 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/unhewn/hewn/internal/agent"
 	"github.com/unhewn/hewn/internal/slash"
@@ -42,6 +44,29 @@ func asModel(t *testing.T, tm tea.Model) Model {
 		t.Fatalf("Update returned %T, want Model", tm)
 	}
 	return m
+}
+
+// TestView_FramedOutputFillsExactlyToHeight guards the frame/border width
+// math in View and handleResize: every nested box (the input box in
+// particular) must land within the outer frame's own wrap budget. Get the
+// arithmetic wrong -- as a prior version of this code did, off by the
+// frame's own Padding(0, 1) -- and lipgloss word-wraps the offending box's
+// border onto an extra line, which this test catches as a line count that
+// no longer matches the terminal height it was sized for.
+func TestView_FramedOutputFillsExactlyToHeight(t *testing.T) {
+	m := newTestModel(t)
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m2 := asModel(t, updated)
+
+	lines := strings.Split(m2.View(), "\n")
+	if len(lines) != 30 {
+		t.Fatalf("View() produced %d lines, want exactly 30 (msg.Height) -- a nested box likely wrapped onto an extra line", len(lines))
+	}
+	for i, l := range lines {
+		if w := lipgloss.Width(l); w != 100 {
+			t.Errorf("line %d width = %d, want 100 (full terminal width): %q", i, w, l)
+		}
+	}
 }
 
 func TestUpdate_TextDeltaAccumulatesWithoutFlushingUntilTick(t *testing.T) {
@@ -252,6 +277,93 @@ func TestUpdate_ClearTranscriptWipesDisplay(t *testing.T) {
 
 	if len(m2.transcript) != 1 || m2.transcript[0].text != "wiped" {
 		t.Errorf("transcript = %+v, want just the wipe command's own output", m2.transcript)
+	}
+}
+
+// TestPicker_SelectionDispatchesAndAppendsOnlyOneSystemItem drives the full
+// /model picker flow: dispatching the no-arg command opens a picker instead
+// of appending its listing to the transcript, and confirming a selection
+// re-dispatches "/model <choice>" -- so the only thing that ever lands in
+// the transcript is that final confirmation, not the list that led to it.
+// This is the fix for the "appends info" complaint on repeated slash use.
+func TestPicker_SelectionDispatchesAndAppendsOnlyOneSystemItem(t *testing.T) {
+	reg := slash.NewRegistry()
+	reg.Register(slash.Command{
+		Name: "model",
+		Run: func(_ context.Context, _ *slash.Context, args string) slash.Result {
+			if args == "" {
+				return slash.Result{
+					Output:        "current model: a\nmodels available:\n  a\n  b",
+					Choices:       []string{"a", "b"},
+					SelectCommand: "model",
+				}
+			}
+			return slash.Result{Output: "model set to " + args}
+		},
+	})
+	loop := &agent.Loop{Tools: tool.NewRegistry(), Approval: tool.NewPolicy(nil, true), Model: "a"}
+	slashCtx := &slash.Context{Loop: loop, Registry: reg}
+	m := NewModel(loop, NewApprover(), slashCtx, "/repo", "fake", "you")
+
+	resized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = asModel(t, resized)
+
+	m.input.SetValue("/model")
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 := asModel(t, updated)
+
+	if m2.state != statePicker || m2.picker == nil {
+		t.Fatalf("state = %v, picker = %v, want an open picker after /model with no args", m2.state, m2.picker)
+	}
+	if len(m2.transcript) != 0 {
+		t.Errorf("transcript = %+v, want nothing appended while the picker is open", m2.transcript)
+	}
+
+	updated2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m3 := asModel(t, updated2)
+
+	if m3.state != stateIdle || m3.picker != nil {
+		t.Errorf("state = %v, picker = %v, want idle with the picker closed after selecting", m3.state, m3.picker)
+	}
+	if len(m3.transcript) != 1 {
+		t.Fatalf("transcript = %+v, want exactly one item -- the selection's own confirmation, not the listing that opened the picker", m3.transcript)
+	}
+	if m3.transcript[0].text != "model set to a" {
+		t.Errorf("transcript[0] = %+v, want the confirmation for choice %q (the first, highlighted one)", m3.transcript[0], "a")
+	}
+}
+
+func TestPicker_EscCancelsWithoutDispatching(t *testing.T) {
+	reg := slash.NewRegistry()
+	reg.Register(slash.Command{
+		Name: "model",
+		Run: func(_ context.Context, _ *slash.Context, args string) slash.Result {
+			if args == "" {
+				return slash.Result{Output: "listing", Choices: []string{"a", "b"}, SelectCommand: "model"}
+			}
+			t.Fatal("model command re-dispatched with args after Esc, want no dispatch at all")
+			return slash.Result{}
+		},
+	})
+	loop := &agent.Loop{Tools: tool.NewRegistry(), Approval: tool.NewPolicy(nil, true), Model: "a"}
+	slashCtx := &slash.Context{Loop: loop, Registry: reg}
+	m := NewModel(loop, NewApprover(), slashCtx, "/repo", "fake", "you")
+
+	resized, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = asModel(t, resized)
+
+	m.input.SetValue("/model")
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2 := asModel(t, updated)
+
+	updated2, _ := m2.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m3 := asModel(t, updated2)
+
+	if m3.state != stateIdle || m3.picker != nil {
+		t.Errorf("state = %v, picker = %v, want idle with the picker closed after Esc", m3.state, m3.picker)
+	}
+	if len(m3.transcript) != 0 {
+		t.Errorf("transcript = %+v, want nothing appended on cancel", m3.transcript)
 	}
 }
 

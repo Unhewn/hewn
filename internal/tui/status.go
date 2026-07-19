@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-
-	"github.com/unhewn/hewn/internal/agent"
 )
 
 // appState is the loop's current activity, shown in the status bar.
@@ -16,6 +14,7 @@ const (
 	stateIdle appState = iota
 	stateStreaming
 	stateAwaitingApproval
+	statePicker
 )
 
 func (s appState) String() string {
@@ -26,16 +25,28 @@ func (s appState) String() string {
 		return "thinking"
 	case stateAwaitingApproval:
 		return "awaiting approval"
+	case statePicker:
+		return "selecting"
 	default:
 		return "unknown"
 	}
 }
 
-// renderStatusBar shows model / cumulative tokens / cwd / state / activity, per
-// HEWN.md §4's mockup.
-func renderStatusBar(width int, model, cwd string, usage agent.Usage, state appState, activity string) string {
-	totalTok := usage.InputTokens + usage.OutputTokens
-	left := fmt.Sprintf(" hewn · %s · %s · %.1fk tok ", model, cwd, float64(totalTok)/1000)
+// contextWarnRatio is how full context needs to be (as a fraction of
+// contextWindow) before the status bar switches to the warning color --
+// only meaningful when contextWindow is known.
+const contextWarnRatio = 0.75
+
+// renderStatusBar shows model / current context size / session total / cwd
+// / state / activity, per HEWN.md §4's mockup (extended with the session
+// total so it's visible without typing /cost). The context figure is the
+// *last turn's* input tokens (how much is actually in context right now),
+// shown as a bare count unless contextWindow is known (Loop.ContextWindow,
+// an opt-in config value) since Hewn has no general way to discover a
+// model's real limit; totalTokens is the cumulative input+output for the
+// whole session, same number /cost reports.
+func renderStatusBar(width int, model, cwd string, contextTokens, contextWindow, totalTokens int, state appState, activity string) string {
+	left := fmt.Sprintf(" hewn · %s · %s · %s · Σ%.1fk ", model, cwd, formatContextTokens(contextTokens, contextWindow), float64(totalTokens)/1000)
 	right := fmt.Sprintf(" %s%s ", activity, state)
 
 	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -43,5 +54,19 @@ func renderStatusBar(width int, model, cwd string, usage agent.Usage, state appS
 		pad = 0
 	}
 
-	return styleStatusBar.Width(width).Render(left + strings.Repeat(" ", pad) + right)
+	bar := styleStatusBar
+	if contextWindow > 0 && float64(contextTokens)/float64(contextWindow) >= contextWarnRatio {
+		bar = styleStatusBarWarning
+	}
+	return bar.Width(width).Render(left + strings.Repeat(" ", pad) + right)
+}
+
+// formatContextTokens renders the current-context token count, with a
+// percentage of contextWindow when it's known (> 0).
+func formatContextTokens(tokens, contextWindow int) string {
+	if contextWindow <= 0 {
+		return fmt.Sprintf("%.1fk tok", float64(tokens)/1000)
+	}
+	pct := float64(tokens) / float64(contextWindow) * 100
+	return fmt.Sprintf("%.1fk / %.0fk tok (%.0f%%)", float64(tokens)/1000, float64(contextWindow)/1000, pct)
 }

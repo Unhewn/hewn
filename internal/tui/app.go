@@ -7,7 +7,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -28,10 +27,15 @@ import (
 // viewport at ~30fps, not per-token.
 const tickInterval = 33 * time.Millisecond
 
-// reservedLines is how much vertical space the header, status bar, input,
-// and their surrounding blank lines take up, leaving the rest for the
-// viewport.
-const reservedLines = 6
+// reservedLines is how much vertical space the top status bar, input box
+// (with its own border), help line, and the outer frame's top/bottom
+// border take up, leaving the rest for the viewport.
+const reservedLines = 9
+
+// frameHorizontalOverhead is the outer frame's left/right border plus its
+// horizontal padding -- subtracted from the terminal width to get the
+// content width shared by the status bar, viewport, and input box.
+const frameHorizontalOverhead = 4
 
 // pendingApproval is one tool call awaiting a decision, mirroring
 // approvalRequest but held on the model between receiving it and the
@@ -62,6 +66,7 @@ type Model struct {
 	dirty              bool
 	glamourRenderer    *glamour.TermRenderer
 	expandedToolCallID string
+	turnProducedOutput bool // true once this turn has emitted any visible text or a tool call
 
 	state      appState
 	turnCancel context.CancelFunc
@@ -69,6 +74,8 @@ type Model struct {
 
 	pendingApproval *pendingApproval
 	lastKeyWasCtrlC bool
+
+	picker *picker
 }
 
 // NewModel builds the root Model. loop must already be fully wired (a
@@ -80,11 +87,11 @@ type Model struct {
 func NewModel(loop *agent.Loop, approver *Approver, slashCtx *slash.Context, cwd, providerName, userName string) Model {
 	vp := viewport.New(80, 20)
 	vp.MouseWheelEnabled = true
-	vp.SetContent(styleSystem.Render("Welcome to hewn! Type a message, or /help for commands."))
+	vp.SetContent(welcomeText())
 
 	s := spinner.New()
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(colorAccent)
+	s.Spinner = spinner.MiniDot
 
 	return Model{
 		loop:            loop,
@@ -167,6 +174,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnDoneMsg:
 		m.closeCurrentAssistant()
+		if !m.turnProducedOutput {
+			m.transcript = append(m.transcript, newSystemItem(
+				"(no reply -- the model likely ran out of its response budget while reasoning; try a shorter question, or /model a less "+
+					"reasoning-heavy model)"))
+		}
+		m.turnProducedOutput = false
 		m.flush()
 		m.state = stateIdle
 		m.events = nil
@@ -203,13 +216,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// contentWidth is the width available inside the outer frame's border and
+// padding -- shared by the header, viewport, input box, and status bar so
+// everything lines up flush against the frame.
+func (m Model) contentWidth() int {
+	w := m.width - frameHorizontalOverhead
+	if w < 0 {
+		return 0
+	}
+	return w
+}
+
 func (m Model) handleResize(msg tea.WindowSizeMsg) Model {
 	m.width = msg.Width
 	m.height = msg.Height
-	m.viewport.Width = msg.Width
+	cw := m.contentWidth()
+	m.viewport.Width = cw
 	m.viewport.Height = msg.Height - reservedLines
-	m.input.SetWidth(msg.Width)
-	m.glamourRenderer = newGlamourRenderer(msg.Width)
+	m.input.SetWidth(cw - 2) // minus the input box's own left/right border
+	m.glamourRenderer = newGlamourRenderer(cw)
+	if m.picker != nil {
+		m.picker.list.SetWidth(cw - 2) // minus the picker box's own left/right border
+	}
 	m.flush()
 	return m
 }
@@ -221,6 +249,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.state == stateAwaitingApproval {
 		return m.handleApprovalKey(key)
+	}
+
+	if m.state == statePicker {
+		return m.handlePickerKey(msg)
 	}
 
 	switch key {
@@ -237,6 +269,13 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "ctrl+o":
 		m.toggleExpand()
+		return m, nil
+
+	case "tab":
+		if m.state != stateIdle {
+			return m, nil
+		}
+		m.completeSlashCommand()
 		return m, nil
 
 	case "enter":
@@ -280,6 +319,75 @@ func (m Model) handleApprovalKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handlePickerKey routes keys while a Choices picker is open. Esc/Ctrl+C
+// always closes it outright -- even mid-filter, where bubbles/list would
+// otherwise treat Esc as "clear the filter, keep browsing" -- since
+// reopening the picker is one keystroke away and a single, predictable
+// "get me out" key is worth more than that nuance. Enter selects whatever
+// is currently highlighted, which is also correct mid-filter: list keeps
+// the top match selected as you type. Everything else (arrows, typed
+// filter characters) forwards to the list itself.
+func (m Model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.picker == nil {
+		m.state = stateIdle
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.picker = nil
+		m.state = stateIdle
+		return m, nil
+
+	case "enter":
+		value, ok := m.picker.selectedValue()
+		selectCommand := m.picker.selectCommand
+		m.picker = nil
+		m.state = stateIdle
+		if !ok {
+			return m, nil
+		}
+		return m.dispatchSlash("/" + selectCommand + " " + value)
+	}
+
+	var cmd tea.Cmd
+	m.picker.list, cmd = m.picker.list.Update(msg)
+	return m, cmd
+}
+
+// applySlashResult applies a dispatched slash command's Result to the
+// model. A Result carrying Choices opens a picker instead of appending
+// Output to the transcript -- the eventual selection (via dispatchSlash)
+// is what actually lands there, not the list that led to it.
+func (m Model) applySlashResult(result slash.Result) (tea.Model, tea.Cmd) {
+	if result.ClearTranscript {
+		m.transcript = nil
+		m.expandedToolCallID = ""
+	}
+
+	if len(result.Choices) > 0 {
+		p := newPicker(result.Choices, result.SelectCommand, m.contentWidth()-2)
+		m.picker = &p
+		m.state = statePicker
+		return m, nil
+	}
+
+	m.transcript = append(m.transcript, newSystemItem(result.Output))
+	m.flush()
+	if result.Quit {
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+// dispatchSlash runs a fully-formed "/command args" line through the slash
+// registry and applies its Result. Used both for user-typed input and to
+// re-dispatch "/model <choice>" after a picker selection.
+func (m Model) dispatchSlash(line string) (tea.Model, tea.Cmd) {
+	result, _ := m.slashRegistry.Dispatch(context.Background(), m.slashCtx, line)
+	return m.applySlashResult(result)
+}
+
 // startTurnOrDispatch handles Enter while idle: a "/command" line goes
 // through the slash registry (shared with --interactive); anything else
 // starts a new turn.
@@ -291,16 +399,7 @@ func (m Model) startTurnOrDispatch() (tea.Model, tea.Cmd) {
 	m.input.SetValue("")
 
 	if result, handled := m.slashRegistry.Dispatch(context.Background(), m.slashCtx, text); handled {
-		if result.ClearTranscript {
-			m.transcript = nil
-			m.expandedToolCallID = ""
-		}
-		m.transcript = append(m.transcript, newSystemItem(result.Output))
-		m.flush()
-		if result.Quit {
-			return m, tea.Quit
-		}
-		return m, nil
+		return m.applySlashResult(result)
 	}
 
 	m.transcript = append(m.transcript, newUserItem(text))
@@ -310,6 +409,7 @@ func (m Model) startTurnOrDispatch() (tea.Model, tea.Cmd) {
 	m.turnCancel = cancel
 	m.events = m.loop.Run(ctx, text)
 	m.state = stateStreaming
+	m.turnProducedOutput = false
 
 	return m, tea.Batch(waitForEvent(m.events), tick(), m.spinner.Tick)
 }
@@ -323,15 +423,20 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		m.ensureAssistantItem()
 		item := m.currentAssistant()
 		item.raw.WriteString(ev.TextDelta)
+		m.turnProducedOutput = true
 		m.dirty = true
 
 	case agent.KindThinkingDelta:
-		// v0.1: not surfaced, same open question as the headless renderer.
+		// Reasoning streams in, but the TUI no longer renders a live tail
+		// of it -- it changed too fast to read. The status bar's spinner +
+		// "thinking…" already shows the agent is active; nothing else to
+		// do with this event here.
 
 	case agent.KindToolCallStart:
 		m.closeCurrentAssistant()
 		m.transcript = append(m.transcript, newToolCallItem(ev.ToolCallStart.ID, ev.ToolCallStart.Name))
 		m.expandedToolCallID = "" // a new call becomes "most recent"; start collapsed
+		m.turnProducedOutput = true
 		m.dirty = true
 
 	case agent.KindToolCallDelta:
@@ -429,34 +534,77 @@ func (m *Model) flush() {
 	m.dirty = false
 }
 
-func (m Model) View() string {
-	header := styleHeader.Render("hewn — minimalist agent harness")
+// welcomeText is shown in the viewport before the first message is sent:
+// hewn's identity plus the keybindings a first-time user needs, so nobody
+// has to discover them by trial and error or by spotting the dim help
+// line at the bottom of the screen.
+func welcomeText() string {
+	lines := []string{
+		styleWelcomeTitle.Render("hewn") + styleSystem.Render("  —  minimalist agent harness"),
+		"",
+		"  Type a message and press " + styleToolName.Render("Enter") + " to send.",
+		"  " + styleToolName.Render("/help") + " lists slash commands.",
+		"  " + styleToolName.Render("ctrl+o") + " expands the most recent tool call.",
+		"  " + styleToolName.Render("ctrl+c") + " interrupts a turn; twice quits.",
+	}
+	return strings.Join(lines, "\n")
+}
 
-	// Activity indicator: spinner when thinking, idle otherwise.
+func (m Model) View() string {
+	cw := m.contentWidth()
+
+	// Activity indicator: just the spinner while streaming -- state's own
+	// String() already supplies the word "thinking" on the right side of
+	// the status bar, so a label here duplicated it.
 	activity := ""
 	if m.state == stateStreaming {
 		activity = m.spinner.View() + " "
 	}
 
-	status := renderStatusBar(m.width, m.loop.Model, m.cwd, m.loop.TotalUsage(), m.state, activity)
+	// The status bar (model / current context size / session total / cwd /
+	// state) is the top bar, per HEWN.md §4's own mockup -- it's the one
+	// line that's always present and always informative, so it belongs
+	// where it's actually seen, not buried under the help line at the
+	// bottom or behind /cost.
+	totalUsage := m.loop.TotalUsage()
+	status := renderStatusBar(cw, m.loop.Model, m.cwd, m.loop.LastUsage().InputTokens, m.loop.ContextWindow,
+		totalUsage.InputTokens+totalUsage.OutputTokens, m.state, activity)
 	help := styleHelp.Render("PgUp/PgDn or mouse wheel scroll • Enter send • /command • ctrl+o expand • ctrl+c interrupt/quit")
+	if m.state == statePicker {
+		help = styleHelp.Render("↑/↓ navigate • type to filter • enter select • esc cancel")
+	}
 
-	sections := []string{header, m.viewport.View()}
+	sections := []string{status, m.viewport.View()}
 
 	if m.state == stateAwaitingApproval && m.pendingApproval != nil {
-		sections = append(sections, styleApprovalPrompt.Render(fmt.Sprintf(
-			"approve %s %s ?  [a]llow once  [A]llow session  [d]eny",
-			m.pendingApproval.req.Tool, string(m.pendingApproval.req.Params),
-		)))
+		sections = append(sections, renderApprovalBox(cw, m.pendingApproval.req))
 	}
 
-	sections = append(sections, m.input.View())
-
-	if suggestions := renderSuggestions(slashSuggestions(m.slashRegistry, m.input.Value())); suggestions != "" {
-		sections = append(sections, suggestions)
+	if m.state == statePicker && m.picker != nil {
+		sections = append(sections, renderPickerBox(m.picker.list.View(), cw))
+	} else {
+		sections = append(sections, renderInputBox(m.input.View(), cw, m.state))
 	}
 
-	sections = append(sections, help, status)
+	if m.state != statePicker {
+		if suggestions := renderSuggestions(slashSuggestions(m.slashRegistry, m.input.Value())); suggestions != "" {
+			sections = append(sections, suggestions)
+		}
+	}
 
-	return lipgloss.JoinVertical(lipgloss.Top, sections...)
+	sections = append(sections, help)
+
+	body := lipgloss.JoinVertical(lipgloss.Top, sections...)
+
+	// lipgloss.Style.Width sets the *total* content+padding width (padding
+	// is subtracted from it when wrapping, then added back before
+	// aligning), so the frame's own Padding(0, 1) needs +2 here on top of
+	// cw -- the width every child line (status bar, viewport, input box)
+	// already targets -- to land flush with no wrap.
+	return lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(colorAccent).
+		Padding(0, 1).
+		Width(cw + 2).
+		Render(body)
 }

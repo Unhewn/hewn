@@ -103,6 +103,9 @@ const indent = "  "
 // one tool call (always the most recent, per the session-5 scope trim) to
 // render expanded; every other tool call always renders collapsed.
 func renderTranscript(items []transcriptItem, expandToolCallID, userName string) string {
+	if len(items) == 0 {
+		return welcomeText()
+	}
 	if userName == "" {
 		userName = "you"
 	}
@@ -136,12 +139,12 @@ func renderTranscript(items []transcriptItem, expandToolCallID, userName string)
 // it shows only the tool name and status -- no raw JSON params. Expand
 // with ctrl+o to see the full input and output.
 func renderToolCall(t *toolCallItem, expanded bool) string {
-	status := "●"
+	status := styleToolPending.Render("●")
 	switch {
 	case t.done && t.isError:
-		status = "✗"
+		status = styleToolError.Render("✗")
 	case t.done:
-		status = "✓"
+		status = styleToolSuccess.Render("✓")
 	}
 
 	head := fmt.Sprintf("%s %s", status, styleToolName.Render(t.name))

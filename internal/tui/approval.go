@@ -2,6 +2,9 @@ package tui
 
 import (
 	"context"
+	"fmt"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/unhewn/hewn/internal/tool"
 )
@@ -36,6 +39,23 @@ type Approver struct {
 // Start, so its Update loop can read the requests it's approving.
 func NewApprover() *Approver {
 	return &Approver{requests: make(chan approvalRequest)}
+}
+
+// renderApprovalBox frames a pending approval request in a warning-colored
+// box -- a "stop and look" moment before granting shell/filesystem access,
+// given more visual weight than a single line so it isn't easy to skim
+// past, especially for someone unfamiliar with what tool approval even
+// means.
+func renderApprovalBox(contentWidth int, req tool.ApprovalRequest) string {
+	body := fmt.Sprintf(
+		"approve %s %s ?  [a]llow once  [A]llow session  [d]eny",
+		req.Tool, string(req.Params),
+	)
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorWarning).
+		Width(contentWidth - 2).
+		Render(styleApprovalPrompt.Render(body))
 }
 
 // RequestApproval implements tool.Approver. Both the request send and the
