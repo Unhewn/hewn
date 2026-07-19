@@ -4,7 +4,7 @@
 
 **Repository:** `github.com/unhewn/hewn` · **Module path:** `github.com/unhewn/hewn`
 
-**Status:** pre-code. This document is the working spec. Everything here is intentionally sized so it can be **expanded or contracted** — sections are tagged `[IN v0.1]`, `[DEFERRED]`, or `[UNDECIDED]`.
+**Status:** v0.1 complete (items 1–10 built and committed). Config system built (item 10), using YAML instead of the originally-planned TOML for consistency with the rest of the project. **Ready for dogfooding.** The event bus (item 11) remains unimplemented — the agent loop currently renders directly to the TUI rather than through a typed event stream. This is the gap to close before calling v0.1 fully done, but it doesn't block dogfooding: Hewn can already read its own source, propose edits, apply them, run tests, and report the result. Starting dogfooding now and logging friction to `FRICTION.md` is the highest-value next step.
 
 ---
 
@@ -52,29 +52,30 @@ The design conversation that seeded this project referenced Pi (`@earendil-works
 
 The goal of v0.1 is exactly one thing: **a TUI you can hold a real conversation in, that can read and edit files and run commands in your repo, and that remembers the session.** That's it. From there you build Hewn with Hewn.
 
-| # | Item | Definition of done |
-|---|---|---|
-| 1 | CLI skeleton | `hewn` opens TUI; `hewn -p "..."` runs headless and exits; `--model`, `--provider`, `--cwd`, `--no-tools` flags |
-| 2 | One provider, streaming | Anthropic Messages API with SSE streaming + tool use. Interface designed for N providers, implemented for 1. |
-| 3 | Agent loop | user msg → stream assistant → parse tool calls → execute → feed results → repeat until stop. Cancellable mid-stream. |
-| 4 | Four tools | `read`, `write`, `edit` (exact-string replace), `bash`. All rooted to project dir. |
-| 5 | Tool approval | Interactive prompt per call; `a` = allow once, `A` = allow this tool for the session, `d` = deny with feedback. |
-| 6 | TUI | Scrollback viewport, multiline input, status bar (model / tokens / cwd / state), streaming render, Ctrl+C interrupt, mouse scroll. |
-| 7 | Slash commands | `/help /model /new /clear /compact /quit /tools /cost /export` — dispatched through a registry, not a switch statement. |
-| 8 | Persistence | SQLite at `~/.local/share/hewn/hewn.db`. Sessions + messages + tool calls. `hewn --resume`, `hewn --list`. |
-| 9 | Context files | Load `AGENTS.md` walking up from cwd, plus `~/.config/hewn/AGENTS.md`. Concatenate into system prompt. |
-| 10 | Config | `~/.config/hewn/config.toml` + `.hewn/config.toml` project override + env vars. Precedence: flags > project > user > defaults. |
-| 11 | Event bus | Internal typed event stream (`agent → UI`). Every UI update goes through it. **This is the seam extensions will hook later.** |
+| # | Item | Definition of done | Status |
+|---|---|---|---|
+| 1 | CLI skeleton | `hewn` opens TUI; `hewn -p "..."` runs headless and exits; `--model`, `--provider`, `--cwd`, `--no-tools` flags | ✓ |
+| 2 | One provider, streaming | Anthropic Messages API with SSE streaming + tool use. Interface designed for N providers, implemented for 1. | ✓ |
+| 3 | Agent loop | user msg → stream assistant → parse tool calls → execute → feed results → repeat until stop. Cancellable mid-stream. | ✓ |
+| 4 | Four tools | `read`, `write`, `edit` (exact-string replace), `bash`. All rooted to project dir. | ✓ |
+| 5 | Tool approval | Interactive prompt per call; `a` = allow once, `A` = allow this tool for the session, `d` = deny with feedback. | ✓ |
+| 6 | TUI | Scrollback viewport, multiline input, status bar (model / tokens / cwd / state), streaming render, Ctrl+C interrupt, mouse scroll. | ✓ |
+| 7 | Slash commands | `/help /model /new /clear /compact /quit /tools /cost /export` — dispatched through a registry, not a switch statement. | ✓ |
+| 8 | Persistence | SQLite at `~/.local/share/hewn/hewn.db`. Sessions + messages + tool calls. `hewn --resume`, `hewn --list`. | ✓ |
+| 9 | Context files | Load `AGENTS.md` walking up from cwd, plus `~/.config/hewn/AGENTS.md`. Concatenate into system prompt. | ✓ |
+| 10 | Config | `~/.config/hewn/config.yaml` + `.hewn/config.yaml` project override + env vars. YAML (not TOML) for consistency with skill front matter. Precedence: flags > project > user > defaults. | ✓ |
+| 11 | Event bus | Internal typed event stream (`agent → UI`). Every UI update goes through it. **This is the seam extensions will hook later.** | ❌ — not yet built |
 
 **Non-goals for v0.1, explicitly:** no subagents, no planning mode, no memory vault, no extensions, no web dashboard, no voice, no session tree/branching (linear sessions only), no vector search, no MCP.
 
 ### `[NEXT]` — v0.2, in rough dependency order
 
-- Additional providers (OpenAI-compatible, then xAI, Gemini, Ollama) + `/model` switching mid-session
+- ✓ Additional providers — OpenAI-compatible provider already built (`internal/provider/openai/`), covering Ollama, llama.cpp, LM Studio, Nous Research, and OpenAI itself via `OPENAI_BASE_URL`. `/model` switching mid-session still pending.
+- ✓ Declarative skills — Markdown + front matter in `.hewn/skills/`. Built in `internal/skill/` and wired via `internal/slash/skills.go`.
+- ✓ MCP client — connecting to servers declared in `.hewn/mcp.json`. Built in `internal/mcp/`.
 - Auto-compaction when context crosses a threshold (summarize oldest N, keep pinned)
 - Session tree: fork / branch / `/tree` navigation (schema already supports it via `parent_id`)
 - Background bash (long-running processes, streamed output, `/jobs`)
-- Skills: declarative YAML/Markdown prompt+tool bundles in `.hewn/skills/`
 - Planning mode (`/plan`): read-only tool profile + structured plan → approve → execute
 - Better diffs: preview edits as unified diff before applying
 - **Extensions** — see §6
@@ -127,9 +128,9 @@ hewn/
 |---|---|---|
 | TUI | `charmbracelet/bubbletea` + `bubbles` + `lipgloss` | v2 if stable; check API churn |
 | Markdown render | `charmbracelet/glamour` | for assistant output |
-| CLI | `spf13/cobra` | or `urfave/cli` if cobra feels heavy for 4 flags |
+| CLI | `spf13/cobra` | 14 flags and growing — cobra's flag-binding suits this better than urfave/cli's positional-arg shape |
 | SQLite | `modernc.org/sqlite` | pure Go, no CGo |
-| Config | `BurntSushi/toml` | avoid viper — it's a lot of machinery for this |
+| Config | `gopkg.in/yaml.v3` | already pulled in by internal/skill for front matter; reused by internal/config |
 | Diff | `sergi/go-diff` or hand-rolled | only needed for preview UI |
 | LLM client | **hand-rolled** | do *not* pull langchaingo; the Anthropic/OpenAI wire formats are simple and you want full control over streaming + tool-call deltas |
 
@@ -324,15 +325,20 @@ Front-mattered Markdown: prompt + allowed tools + trigger.
 - ➖ No logic. Not an extension system, and shouldn't pretend to be.
 - *Verdict:* Do this in v0.2 regardless. Cheapest value in the whole doc.
 
-### Recommended path (open to argument)
+### Recommended path (actual progress as of 2026-07-18)
 
 ```
-v0.1  Internal Go registries for tools/commands/providers.
-      Typed event bus in place, treated as the future extension ABI.
-      Ship nothing user-facing.
+v0.1  Internal Go registries for tools/commands/providers.    ✓
+      Config system (YAML).                                    ✓
+      Event bus not yet built — deferred behind dogfooding.     ❌
 
-v0.2  (a) Declarative skills — Markdown + front matter. Covers C.
-      (b) MCP client. Covers A, with an existing ecosystem.
+v0.2  (a) Declarative skills — Markdown + front matter.       ✓
+      (b) MCP client.                                          ✓
+      OpenAI-compatible provider (Ollama, LM Studio, etc.).    ✓
+
+now   Dogfood. Log friction. Let FRICTION.md reorder the
+      remaining v0.2 backlog: compaction, session tree,
+      background bash, planning mode, better diffs, event bus.
 
 v0.3  Decide between subprocess-RPC and WASM for hooks (D) and
       first-class extensions, informed by what actually annoyed you
@@ -349,20 +355,32 @@ The whole point of the dogfood approach is that this decision gets *easier* the 
 
 ## 7. Next steps
 
-### Immediate (this week)
-1. `go mod init github.com/unhewn/hewn`, MIT LICENSE, README with the clean-room statement.
-2. Decide: **first provider** (recommend Anthropic — best tool-use semantics to build against).
-3. Build **bottom-up, not TUI-first**, despite the dogfood goal:
-   - `provider/anthropic` + streaming, verified by a `go test` that hits the real API.
-   - `agent.Loop` driven by the **headless** renderer. Get the loop correct where it's easy to debug.
-   - Then wrap it in Bubble Tea. The TUI becomes a view over a loop that already works.
-4. Add `read` + `bash` first (Hewn can then explain its own codebase and run its own tests). `write` + `edit` next — that's the moment it starts building itself.
+### Current state (2026-07-18)
 
-### Milestone: "self-hosting"
-The dogfood gate is met when Hewn can, in one session: read its own source, propose an edit, apply it, run `go test ./...`, and report the result — with you approving each mutation. Everything after that is built with Hewn.
+v0.1 items 1-10 are built and committed. The event bus (item 11) is the only v0.1 gap — it doesn't block dogfooding so it's been deferred to let real usage surface what's actually needed from it.
 
-### Sequenced backlog after that
-`/compact` → session resume → second provider → skills → MCP client → planning mode → subagents
+Already built ahead of v0.2 deadline:
+- ✓ OpenAI-compatible provider (covers Ollama, llama.cpp, LM Studio, Nous, OpenAI itself)
+- ✓ Declarative skills (`.hewn/skills/*.md` with YAML front matter)
+- ✓ MCP client (`.hewn/mcp.json` server declarations)
+
+### Next: start dogfooding
+
+The "self-hosting" milestone is already reachable — Hewn can read its own source, write edits, run tests. The real next step is **using it** and logging every friction point to `FRICTION.md`. That file is the actual roadmap from here.
+
+1. Use Hewn for real work. Log everything that's worse than using another agent harness to `FRICTION.md`.
+2. When a friction hits repeat-3-or-more or blocks completing a task, fix it.
+3. After a week of dogfooding, review `FRICTION.md` for pattern — that pattern decides the v0.2 build order, not this doc.
+
+### Immediate backlog (unordered, will be reordered by FRICTION.md)
+
+- Auto-compaction (`/compact`) — summarize oldest N turns to free context
+- Session tree: fork / branch / `/tree` navigation
+- Background bash (long-running processes, streamed output, `/jobs`)
+- Planning mode (`/plan`): read-only tool profile + structured plan → approve → execute
+- Better diffs: preview edits as unified diff before applying
+- Event bus (item 11) — typed event stream for the agent → UI seam
+- Extensions mechanism (deferred per §6 recommended path)
 
 ### Things to get right early because they're painful later
 - Schema versioning + migrations

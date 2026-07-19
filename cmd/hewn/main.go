@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/unhewn/hewn/internal/agent"
+	"github.com/unhewn/hewn/internal/config"
 	"github.com/unhewn/hewn/internal/ctxfile"
 	"github.com/unhewn/hewn/internal/mcp"
 	"github.com/unhewn/hewn/internal/provider"
@@ -34,6 +35,15 @@ import (
 const resumeLatest = "latest"
 
 func main() {
+	var (
+		flagProvider string
+		flagModel    string
+		flagCWD      string
+		flagDB       string
+		flagNoTools  bool
+		flagYolo     bool
+	)
+
 	rootCmd := &cobra.Command{
 		Use:           "hewn",
 		Short:         "hewn - A minimalist Go agent harness",
@@ -45,28 +55,89 @@ func main() {
 				return runList(cmd)
 			}
 
+			// --- Load layered config ---
+			cfg, err := config.Load("") // user-level only; cwd unknown yet
+			if err != nil {
+				return fmt.Errorf("hewn: config: %w", err)
+			}
+
+			// Apply CLI flag overrides, tracking which were explicitly set so
+			// they take priority over both user and project config.
+			changed := map[string]bool{
+				"provider": cmd.Flags().Changed("provider"),
+				"model":    cmd.Flags().Changed("model"),
+				"db":       cmd.Flags().Changed("db"),
+				"cwd":      cmd.Flags().Changed("cwd"),
+				"no-tools": cmd.Flags().Changed("no-tools"),
+				"yolo":     cmd.Flags().Changed("yolo"),
+			}
+			config.ApplyFlags(&cfg, changed, struct {
+				Provider string
+				Model    string
+				DB       string
+				CWD      string
+				NoTools  bool
+				Yolo     bool
+			}{Provider: flagProvider, Model: flagModel, DB: flagDB, CWD: flagCWD, NoTools: flagNoTools, Yolo: flagYolo})
+
+			// Resolve cwd: flag or config or os.Getwd()
+			if cfg.CWD == "" {
+				dir, err := os.Getwd()
+				if err != nil {
+					return fmt.Errorf("hewn: resolve cwd: %w", err)
+				}
+				cfg.CWD = dir
+			} else {
+				abs, err := filepath.Abs(cfg.CWD)
+				if err != nil {
+					return fmt.Errorf("hewn: resolve cwd %q: %w", cfg.CWD, err)
+				}
+				cfg.CWD = abs
+			}
+
+			// Load project-level config (now that cwd is known) and merge
+			// -- but only if the flag itself wasn't set, so project config
+			// can't override an explicit --cwd.
+			if !changed["cwd"] {
+				if err := config.LoadProject(&cfg, cfg.CWD); err != nil {
+					return fmt.Errorf("hewn: config: %w", err)
+				}
+			}
+			// Re-apply flags so explicit --provider/--model etc. still beat
+			// whatever the project file says.
+			config.ApplyFlags(&cfg, changed, struct {
+				Provider string
+				Model    string
+				DB       string
+				CWD      string
+				NoTools  bool
+				Yolo     bool
+			}{Provider: flagProvider, Model: flagModel, DB: flagDB, CWD: cfg.CWD, NoTools: flagNoTools, Yolo: flagYolo})
+
+			// Resolve DB path to an absolute path (or the default).
+			cfg.DB = config.ResolveDB(cfg.DB)
+
 			interactive, _ := cmd.Flags().GetBool("interactive")
 			if interactive {
-				return runInteractive(cmd)
+				return runInteractive(cmd, &cfg)
 			}
 
 			prompt, _ := cmd.Flags().GetString("prompt")
 			if prompt == "" {
-				return runTUI(cmd)
+				return runTUI(cmd, &cfg)
 			}
-			return runHeadless(cmd, prompt)
+			return runHeadless(cmd, &cfg, prompt)
 		},
 	}
 
-	rootCmd.Flags().StringP("prompt", "p", "", "run prompt headless and exit")
-	rootCmd.Flags().String("provider", "anthropic", `provider to use: "anthropic" or "openai" (any OpenAI-compatible backend -- Ollama, llama.cpp, LM Studio, Nous Research, OpenAI itself -- via OPENAI_BASE_URL and OPENAI_API_KEY)`)
-	rootCmd.Flags().String("model", "claude-opus-4-8", "model to use (a model name your chosen --provider actually serves, e.g. a locally-pulled Ollama model)")
-	rootCmd.Flags().String("cwd", "", "project directory (default: current directory)")
-	rootCmd.Flags().Bool("no-tools", false, "disable tool use")
-	rootCmd.Flags().Bool("yolo", false, "pre-approve every tool call for this run")
-	rootCmd.Flags().String("db", "", "session database path (default: ~/.local/share/hewn/hewn.db)")
+	rootCmd.Flags().StringVarP(&flagProvider, "provider", "p", "", `provider to use: "anthropic" or "openai" (any OpenAI-compatible backend -- Ollama, llama.cpp, LM Studio, Nous Research, OpenAI itself -- via OPENAI_BASE_URL and OPENAI_API_KEY). Default taken from config; first fallback is "anthropic."`)
+	rootCmd.Flags().StringVar(&flagModel, "model", "", "model to use (overrides config; default from config, or claude-opus-4-8)")
+	rootCmd.Flags().StringVar(&flagCWD, "cwd", "", "project directory (default: current directory)")
+	rootCmd.Flags().StringVar(&flagDB, "db", "", "session database path (default: ~/.local/share/hewn/hewn.db)")
+	rootCmd.Flags().BoolVar(&flagNoTools, "no-tools", false, "disable tool use")
+	rootCmd.Flags().BoolVar(&flagYolo, "yolo", false, "pre-approve every tool call for this run")
 	rootCmd.Flags().Bool("list", false, "list recent sessions and exit")
-	rootCmd.Flags().String("resume", "", "resume a session: bare flag resumes the most recent, or --resume=<id-or-prefix> for a specific one (the = is required)")
+	rootCmd.Flags().String("resume", "", `resume a session: bare flag resumes the most recent, or --resume=<id-or-prefix> for a specific one (the = is required)`)
 	rootCmd.Flags().Lookup("resume").NoOptDefVal = resumeLatest
 	rootCmd.Flags().Bool("interactive", false, "run an interactive session with slash commands (/help for the list)")
 
@@ -74,18 +145,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-}
-
-// dbPath resolves --db, defaulting to HEWN.md §2 item 8's literal path.
-func dbPath(cmd *cobra.Command) (string, error) {
-	if v, _ := cmd.Flags().GetString("db"); v != "" {
-		return v, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("hewn: resolve home directory: %w", err)
-	}
-	return filepath.Join(home, ".local", "share", "hewn", "hewn.db"), nil
 }
 
 // userAgentsPath resolves ~/.config/hewn/AGENTS.md. Returns "" (skip) if
@@ -102,13 +161,11 @@ func userAgentsPath() string {
 // runList prints recent sessions and exits; it never touches a provider or
 // the agent loop.
 func runList(cmd *cobra.Command) error {
-	path, err := dbPath(cmd)
-	if err != nil {
-		return err
-	}
+	dbFlag, _ := cmd.Flags().GetString("db")
+	db := config.ResolveDB(dbFlag)
 
 	ctx := context.Background()
-	store, err := session.Open(ctx, path)
+	store, err := session.Open(ctx, db)
 	if err != nil {
 		return fmt.Errorf("hewn: %w", err)
 	}
@@ -185,20 +242,12 @@ type built struct {
 // provider, the sandbox-rooted tool registry, and an agent.Loop wired to
 // store. titleSource seeds a new session's title when one is created (it's
 // ignored when resuming). approver becomes the loop's approval policy.
-func buildLoop(ctx context.Context, cmd *cobra.Command, store *session.Store, approver tool.Approver, titleSource string) (built, error) {
-	providerName, _ := cmd.Flags().GetString("provider")
-	model, _ := cmd.Flags().GetString("model")
-	cwd, _ := cmd.Flags().GetString("cwd")
-	noTools, _ := cmd.Flags().GetBool("no-tools")
-	yolo, _ := cmd.Flags().GetBool("yolo")
-
-	if cwd == "" {
-		dir, err := os.Getwd()
-		if err != nil {
-			return built{}, fmt.Errorf("hewn: resolve cwd: %w", err)
-		}
-		cwd = dir
-	}
+func buildLoop(ctx context.Context, cfg *config.Config, cmd *cobra.Command, store *session.Store, approver tool.Approver, titleSource string) (built, error) {
+	providerName := cfg.Provider
+	model := cfg.Model
+	cwd := cfg.CWD
+	noTools := cfg.NoTools
+	yolo := cfg.Yolo
 
 	var (
 		sessionID string
@@ -301,24 +350,19 @@ func registerSkills(registry *slash.Registry, tools *tool.Registry, cwd, baseSys
 
 // runHeadless drives one prompt through the agent loop with a plain-stdout
 // renderer: HEWN.md §5's "same agent loop, only the event sink differs".
-// Every run is durably recorded (HEWN.md §2 item 8) -- there is no flag to
-// turn persistence off.
-func runHeadless(cmd *cobra.Command, prompt string) error {
-	dbFile, err := dbPath(cmd)
-	if err != nil {
-		return err
-	}
+// Every run is durably recorded -- there is no flag to turn persistence off.
+func runHeadless(cmd *cobra.Command, cfg *config.Config, prompt string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	store, err := session.Open(ctx, dbFile)
+	store, err := session.Open(ctx, cfg.DB)
 	if err != nil {
 		return fmt.Errorf("hewn: %w", err)
 	}
 	defer store.Close()
 
 	renderer := agent.NewHeadlessRenderer(os.Stdout, os.Stdin)
-	b, err := buildLoop(ctx, cmd, store, renderer, prompt)
+	b, err := buildLoop(ctx, cfg, cmd, store, renderer, prompt)
 	if err != nil {
 		return err
 	}
@@ -331,14 +375,10 @@ func runHeadless(cmd *cobra.Command, prompt string) error {
 // runInteractive is a REPL: it reads lines from stdin, dispatching
 // "/command" lines through the slash registry and everything else as a
 // user turn through the same agent loop and renderer runHeadless uses.
-func runInteractive(cmd *cobra.Command) error {
-	dbFile, err := dbPath(cmd)
-	if err != nil {
-		return err
-	}
+func runInteractive(cmd *cobra.Command, cfg *config.Config) error {
 	setupCtx := context.Background()
 
-	store, err := session.Open(setupCtx, dbFile)
+	store, err := session.Open(setupCtx, cfg.DB)
 	if err != nil {
 		return fmt.Errorf("hewn: %w", err)
 	}
@@ -353,7 +393,7 @@ func runInteractive(cmd *cobra.Command) error {
 	stdin := bufio.NewReader(os.Stdin)
 	renderer := agent.NewHeadlessRenderer(os.Stdout, stdin)
 
-	b, err := buildLoop(setupCtx, cmd, store, renderer, "interactive session")
+	b, err := buildLoop(setupCtx, cfg, cmd, store, renderer, "interactive session")
 	if err != nil {
 		return err
 	}
@@ -415,21 +455,17 @@ func runInteractive(cmd *cobra.Command) error {
 // itself (Bubble Tea reads raw terminal input, so it arrives as an
 // ordinary keypress, not an OS signal), so there's no signal.NotifyContext
 // here unlike the other two modes.
-func runTUI(cmd *cobra.Command) error {
-	dbFile, err := dbPath(cmd)
-	if err != nil {
-		return err
-	}
+func runTUI(cmd *cobra.Command, cfg *config.Config) error {
 	ctx := context.Background()
 
-	store, err := session.Open(ctx, dbFile)
+	store, err := session.Open(ctx, cfg.DB)
 	if err != nil {
 		return fmt.Errorf("hewn: %w", err)
 	}
 	defer store.Close()
 
 	approver := tui.NewApprover()
-	b, err := buildLoop(ctx, cmd, store, approver, "tui session")
+	b, err := buildLoop(ctx, cfg, cmd, store, approver, "tui session")
 	if err != nil {
 		return err
 	}
