@@ -29,6 +29,22 @@ type Config struct {
 	APIKey   string `yaml:"api-key,omitempty"`
 	BaseURL  string `yaml:"base-url,omitempty"`
 	Name     string `yaml:"name,omitempty"`
+
+	// ContextWindow is the model's context size in tokens, if you know it
+	// (e.g. a local Ollama model's configured num_ctx). Hewn has no way to
+	// discover this on its own -- unset means the status bar shows the raw
+	// token count instead of a percentage.
+	ContextWindow int `yaml:"context-window,omitempty"`
+
+	// MaxTokens caps the model's output length per turn. Left unset (0),
+	// each provider falls back to its own internal default (Anthropic:
+	// 4096; OpenAI-compatible: 16384, sized for reasoning-capable local
+	// models like deepseek-r1/qwq/gemma that spend a large chunk of their
+	// budget on hidden reasoning before any visible output) -- both are
+	// easy to run into on a real coding turn. defaults() matches the
+	// higher, reasoning-aware figure so this is rarely the reason a
+	// response gets cut short, regardless of provider.
+	MaxTokens int `yaml:"max-tokens,omitempty"`
 }
 
 // Load layered configuration: user config first, then project config
@@ -108,9 +124,10 @@ func ResolveDB(db string) string {
 // defaults returns Hewn's built-in config defaults.
 func defaults() Config {
 	return Config{
-		Provider: "anthropic",
-		Model:    "claude-opus-4-8",
-		DB:       "", // resolved lazily via ResolveDB
+		Provider:  "anthropic",
+		Model:     "claude-opus-4-8",
+		DB:        "", // resolved lazily via ResolveDB
+		MaxTokens: 16384,
 	}
 }
 
@@ -176,6 +193,12 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Name != "" {
 		dst.Name = src.Name
+	}
+	if src.ContextWindow != 0 {
+		dst.ContextWindow = src.ContextWindow
+	}
+	if src.MaxTokens != 0 {
+		dst.MaxTokens = src.MaxTokens
 	}
 }
 

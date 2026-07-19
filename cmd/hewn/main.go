@@ -325,12 +325,14 @@ func buildLoop(ctx context.Context, cfg *config.Config, cmd *cobra.Command, stor
 	}
 
 	loop := &agent.Loop{
-		Provider: p,
-		Tools:    registry,
-		Approval: tool.NewPolicy(approver, yolo),
-		Model:    model,
-		System:   system,
-		Session:  store,
+		Provider:      p,
+		Tools:         registry,
+		Approval:      tool.NewPolicy(approver, yolo),
+		Model:         model,
+		System:        system,
+		Session:       store,
+		ContextWindow: cfg.ContextWindow,
+		MaxTokens:     cfg.MaxTokens,
 	}
 	if history != nil {
 		loop.SeedHistory(history)

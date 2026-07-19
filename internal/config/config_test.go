@@ -15,6 +15,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.Model != "claude-opus-4-8" {
 		t.Errorf("default model = %q, want claude-opus-4-8", cfg.Model)
 	}
+	if cfg.MaxTokens != 16384 {
+		t.Errorf("default MaxTokens = %d, want 16384 -- an unset MaxTokens silently caps every response at the provider's own lower fallback (4096 on Anthropic), and reasoning-capable local models need the extra headroom", cfg.MaxTokens)
+	}
 }
 
 func TestLoadMissingFile(t *testing.T) {
