@@ -122,6 +122,37 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (provider.Str
 	return newChunkStream(resp.Body), nil
 }
 
+// charsPerTokenEstimate is a rough English/code average used only because
+// no OpenAI-compatible backend (Ollama, llama.cpp, LM Studio, and most
+// self-hosted servers) exposes a real token-counting endpoint the way
+// Anthropic's /v1/messages/count_tokens does. CountTokens's result is
+// always an approximation, never presented as exact.
+const charsPerTokenEstimate = 4
+
+// CountTokens approximates req's input token count from its rendered
+// character length. There is no network call and no error path: any
+// request this function is given can always be measured.
+func (c *Client) CountTokens(_ context.Context, req provider.Request) (int, error) {
+	var chars int
+	chars += len(systemText(req.System))
+	for _, m := range req.Messages {
+		for _, block := range m.Content {
+			switch block.Kind {
+			case provider.ContentText:
+				chars += len(block.Text)
+			case provider.ContentToolUse:
+				chars += len(block.ToolUseText) + len(block.ToolInput)
+			case provider.ContentToolResult:
+				chars += len(block.ToolResultContent)
+			}
+		}
+	}
+	for _, t := range req.Tools {
+		chars += len(t.Name) + len(t.Description) + len(t.InputSchema)
+	}
+	return chars / charsPerTokenEstimate, nil
+}
+
 func (c *Client) setHeaders(req *http.Request) {
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)

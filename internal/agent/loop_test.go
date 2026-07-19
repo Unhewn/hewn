@@ -42,16 +42,24 @@ func (s *fakeStream) Close() error { return nil }
 // fakeProvider returns one scripted turn (slice of events) per call to
 // Stream, in order.
 type fakeProvider struct {
-	mu          sync.Mutex
-	turns       [][]provider.Event
-	call        int
-	block       bool // if true, every Stream call blocks until ctx.Done()
-	lastRequest provider.Request
+	mu             sync.Mutex
+	turns          [][]provider.Event
+	call           int
+	block          bool // if true, every Stream call blocks until ctx.Done()
+	lastRequest    provider.Request
+	countTokens    int
+	countTokensErr error
 }
 
 func (p *fakeProvider) Name() string { return "fake" }
 
 func (p *fakeProvider) Models(context.Context) ([]provider.ModelInfo, error) { return nil, nil }
+
+func (p *fakeProvider) CountTokens(context.Context, provider.Request) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.countTokens, p.countTokensErr
+}
 
 func (p *fakeProvider) Stream(ctx context.Context, req provider.Request) (provider.Stream, error) {
 	p.mu.Lock()
@@ -295,6 +303,18 @@ func TestLoop_Compact_NoOpUnderKeepRecent(t *testing.T) {
 	if p.call != 0 {
 		t.Error("Compact called the provider even though there was nothing to summarize")
 	}
+}
+
+// costEqual compares dollar amounts with a tolerance tight enough to catch
+// a real pricing bug but loose enough to absorb float64 rounding noise
+// (e.g. 0.03 vs 0.030000000000000002).
+func costEqual(a, b float64) bool {
+	const epsilon = 1e-9
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d < epsilon
 }
 
 func TestLoop_TotalUsageAccumulates(t *testing.T) {

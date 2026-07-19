@@ -19,6 +19,7 @@ import (
 const (
 	messagesURL      = "https://api.anthropic.com/v1/messages"
 	modelsURL        = "https://api.anthropic.com/v1/models"
+	countTokensURL   = "https://api.anthropic.com/v1/messages/count_tokens" //nolint:gosec // URL, not a credential
 	anthropicVersion = "2023-06-01"
 	defaultMaxTokens = 4096
 )
@@ -106,6 +107,49 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (provider.Str
 	}
 
 	return newSSEStream(resp.Body), nil
+}
+
+// CountTokens calls the real /v1/messages/count_tokens endpoint: the
+// exact input-token count for req, at no cost and without generating a
+// response. Tools and system count toward the total the same as they
+// would in the real Stream call.
+func (c *Client) CountTokens(ctx context.Context, req provider.Request) (int, error) {
+	wr, err := toWireRequest(req)
+	if err != nil {
+		return 0, err
+	}
+
+	body, err := json.Marshal(wireCountTokensRequest{
+		Model:    wr.Model,
+		System:   wr.System,
+		Messages: wr.Messages,
+		Tools:    wr.Tools,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("anthropic: encode count_tokens request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, countTokensURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, fmt.Errorf("anthropic: build count_tokens request: %w", err)
+	}
+	c.setHeaders(httpReq)
+	httpReq.Header.Set("content-type", "application/json")
+
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return 0, fmt.Errorf("anthropic: count_tokens request: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, apiError(resp)
+	}
+	defer resp.Body.Close()
+
+	var out wireCountTokensResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("anthropic: decode count_tokens response: %w", err)
+	}
+	return out.InputTokens, nil
 }
 
 func (c *Client) setHeaders(req *http.Request) {

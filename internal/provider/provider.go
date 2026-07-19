@@ -24,6 +24,12 @@ type Provider interface {
 
 	// Stream starts a turn and returns a Stream of events for it.
 	Stream(ctx context.Context, req Request) (Stream, error)
+
+	// CountTokens returns req's input token count without generating a
+	// response -- the pre-flight number a caller prices before sending.
+	// A provider without a real counting endpoint may approximate; the
+	// return value is never presented as more precise than that.
+	CountTokens(ctx context.Context, req Request) (int, error)
 }
 
 // Stream yields the events of one in-flight turn.

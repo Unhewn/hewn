@@ -112,6 +112,10 @@ func (p fakeModelProvider) Stream(context.Context, provider.Request) (provider.S
 	panic("not implemented: no slash command should call Stream")
 }
 
+func (p fakeModelProvider) CountTokens(context.Context, provider.Request) (int, error) {
+	panic("not implemented: no slash command should call CountTokens")
+}
+
 func TestModelCommand_NoArgsOffersChoices(t *testing.T) {
 	c := newTestContext(t)
 	c.Loop.Provider = fakeModelProvider{models: []provider.ModelInfo{

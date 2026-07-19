@@ -129,6 +129,21 @@ func toWireContentUncached(c provider.ContentBlock) (wireContent, error) {
 	}
 }
 
+// wireCountTokensRequest mirrors wireRequest minus the fields that don't
+// affect input token count (MaxTokens, Stream) -- count_tokens rejects
+// neither if sent, but omitting them keeps this request's shape honest
+// about what it actually needs.
+type wireCountTokensRequest struct {
+	Model    string        `json:"model"`
+	System   []wireContent `json:"system,omitempty"`
+	Messages []wireMessage `json:"messages"`
+	Tools    []wireTool    `json:"tools,omitempty"`
+}
+
+type wireCountTokensResponse struct {
+	InputTokens int `json:"input_tokens"`
+}
+
 type wireModel struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
