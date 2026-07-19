@@ -116,6 +116,24 @@ config for you — you'll only need the env var from then on.
 
 Every run — TUI, headless, or interactive — is recorded to the session database; there is no flag to disable persistence.
 
+### Config file
+
+`~/.config/hewn/config.yaml` (user-level) and `.hewn/config.yaml` (project-level, wins on conflict) accept:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `provider` | `anthropic` | same values as `--provider` |
+| `model` | `claude-opus-4-8` | same as `--model` |
+| `db` | `~/.local/share/hewn/hewn.db` | same as `--db` |
+| `cwd` | current directory | same as `--cwd` |
+| `no-tools` | `false` | same as `--no-tools` |
+| `yolo` | `false` | same as `--yolo` |
+| `api-key` | | provider API key, if you'd rather not use an env var |
+| `base-url` | | `OPENAI_BASE_URL` equivalent, for a non-default OpenAI-compatible backend |
+| `name` | | your name, used to label your messages in the TUI |
+| `context-window` | *(unset)* | your model's context size in tokens, if you know it (e.g. a local Ollama model's `num_ctx`). Hewn has no way to discover this on its own — unset, the status bar shows a raw token count; set, it shows a percentage and warns past 75%. |
+| `max-tokens` | `16384` | caps a single response's length. The default is sized for reasoning-capable local models (deepseek-r1, qwq, gemma, etc.), which spend a large chunk of their budget on hidden reasoning before any visible output — lower it if you want shorter, cheaper responses from a model that doesn't need the headroom. |
+
 ## Context files
 
 Every session's system prompt is assembled from `AGENTS.md` files, no flag needed. Hewn walks up from `--cwd` (or the current directory), collecting each directory's `AGENTS.md` along the way, and stops once it reaches the directory containing `.git` (that directory's `AGENTS.md` is included, then the walk stops). `~/.config/hewn/AGENTS.md`, if present, is prepended before all of those as a user-global default. The pieces are concatenated general-to-specific — user-global first, repo root next, down to the closest `AGENTS.md` to `--cwd` last — so project-specific instructions have the final say over general ones.

@@ -73,7 +73,8 @@ The goal of v0.1 is exactly one thing: **a TUI you can hold a real conversation 
 - ✓ Additional providers — OpenAI-compatible provider already built (`internal/provider/openai/`), covering Ollama, llama.cpp, LM Studio, Nous Research, and OpenAI itself via `OPENAI_BASE_URL`. `/model` switching mid-session still pending.
 - ✓ Declarative skills — Markdown + front matter in `.hewn/skills/`. Built in `internal/skill/` and wired via `internal/slash/skills.go`.
 - ✓ MCP client — connecting to servers declared in `.hewn/mcp.json`. Built in `internal/mcp/`.
-- Auto-compaction when context crosses a threshold (summarize oldest N, keep pinned)
+- ✓ Prompt caching — Anthropic `cache_control` breakpoints on the system prompt and a rolling last-message marker (`internal/agent/loop.go`'s `buildRequest`). OpenAI-compatible requests ignore the marker (most local/hosted backends there cache automatically with no explicit breakpoint).
+- ✓ `/compact` (manual) — `Loop.Compact` summarizes everything but the last 6 messages via a tool-free one-shot call, replaces in-memory history, leaves persisted session rows untouched. Auto-triggering it when context crosses a threshold is still open — `Loop.ContextWindow` (opt-in config, since Hewn can't discover a model's real limit generically) gives the pieces to build the trigger, but nothing calls `Compact` automatically yet.
 - Session tree: fork / branch / `/tree` navigation (schema already supports it via `parent_id`)
 - Background bash (long-running processes, streamed output, `/jobs`)
 - Planning mode (`/plan`): read-only tool profile + structured plan → approve → execute
@@ -256,7 +257,7 @@ Details that matter for daily use:
 - **Approval is inline**, not a modal that loses your scroll position.
 - **Ctrl+C once = interrupt generation. Twice = quit.** Never lose a session to a stray Ctrl+C.
 - Scrollback must handle a 200k-token session without choking — consider virtualized rendering early if `viewport` struggles.
-- Slash commands: registry-based, with completion popup on `/`.
+- Slash commands: registry-based, Tab-completes to the longest common prefix of matching names. A command whose `Result` carries `Choices` (e.g. `/model` with no args) opens an arrow-key/type-to-filter picker instead of dumping a list into the transcript.
 
 ---
 
