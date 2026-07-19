@@ -41,13 +41,55 @@ func modelCommand() Command {
 	return Command{
 		Name:        "model",
 		Description: "show or set the model for subsequent turns (e.g. /model claude-sonnet-4-20250514, /model gpt-4o, /model gemma4:12b)",
-		Run: func(_ context.Context, c *Context, args string) Result {
-			if args == "" {
-				return Result{Output: fmt.Sprintf("current model: %s\nchange it with: /model <name>\ne.g. /model claude-sonnet-4-20250514  /model gpt-4o  /model gemma4:12b", c.Loop.Model)}
+		Run: func(ctx context.Context, c *Context, args string) Result {
+			if args != "" {
+				c.Loop.Model = args
+				return Result{Output: fmt.Sprintf("model set to %s", args)}
 			}
-			c.Loop.Model = args
-			return Result{Output: fmt.Sprintf("model set to %s", args)}
+			return listModelsResult(ctx, c, "model")
 		},
+	}
+}
+
+// listModelsResult builds the current-model-plus-available-models listing
+// shared by /model (no args) and /models. It always sets Output (plain
+// text, for a frontend that can only print it); when the provider actually
+// returns models, it also sets Choices so a frontend that can render an
+// interactive picker (the TUI) can offer arrow-key selection instead of
+// making the user retype the exact model name. Selecting a choice
+// dispatches "/<selectCommand> <id>".
+func listModelsResult(ctx context.Context, c *Context, selectCommand string) Result {
+	current := ""
+	if c.Loop != nil {
+		current = c.Loop.Model
+	}
+	header := fmt.Sprintf("current model: %s", current)
+
+	if c.Loop == nil || c.Loop.Provider == nil {
+		return Result{Output: header + "\nchange it with: /model <name>"}
+	}
+
+	models, err := c.Loop.Provider.Models(ctx)
+	if err != nil {
+		return Result{Output: fmt.Sprintf("%s\nerror listing available models: %v\nchange it with: /model <name>", header, err)}
+	}
+	if len(models) == 0 {
+		return Result{Output: fmt.Sprintf("%s\nno models reported by the provider\nchange it with: /model <name>", header)}
+	}
+
+	ids := make([]string, len(models))
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\nmodels available at %s:\n", header, c.ProviderName)
+	for i, m := range models {
+		ids[i] = m.ID
+		b.WriteString("  " + m.ID + "\n")
+	}
+	b.WriteString("\nswitch with: /model <name>")
+
+	return Result{
+		Output:        strings.TrimRight(b.String(), "\n"),
+		Choices:       ids,
+		SelectCommand: selectCommand,
 	}
 }
 
@@ -66,23 +108,7 @@ func modelsCommand() Command {
 		Name:        "models",
 		Description: "list models available from the current provider",
 		Run: func(ctx context.Context, c *Context, _ string) Result {
-			if c.Loop == nil || c.Loop.Provider == nil {
-				return Result{Output: "no provider configured"}
-			}
-			models, err := c.Loop.Provider.Models(ctx)
-			if err != nil {
-				return Result{Output: fmt.Sprintf("error listing models: %v", err)}
-			}
-			if len(models) == 0 {
-				return Result{Output: "no models reported by the provider"}
-			}
-			var b strings.Builder
-			b.WriteString(fmt.Sprintf("models available at %s:\n", c.ProviderName))
-			for _, m := range models {
-				b.WriteString("  " + m.ID + "\n")
-			}
-			b.WriteString("\nswitch with: /model <name>")
-			return Result{Output: strings.TrimRight(b.String(), "\n")}
+			return listModelsResult(ctx, c, "model")
 		},
 	}
 }
@@ -120,9 +146,19 @@ func clearCommand() Command {
 func compactCommand() Command {
 	return Command{
 		Name:        "compact",
-		Description: "summarize older context to save tokens (not implemented yet)",
-		Run: func(_ context.Context, _ *Context, _ string) Result {
-			return Result{Output: "compaction isn't implemented yet -- see HEWN.md's v0.2 auto-compaction plan"}
+		Description: "summarize older context to save tokens",
+		Run: func(ctx context.Context, c *Context, _ string) Result {
+			result, err := c.Loop.Compact(ctx, 0)
+			if err != nil {
+				return Result{Output: fmt.Sprintf("compact failed: %v", err)}
+			}
+			if result.MessagesBefore == result.MessagesAfter {
+				return Result{Output: "nothing to compact -- history is already short enough"}
+			}
+			return Result{Output: fmt.Sprintf(
+				"compacted %d messages (~%d tokens) into a summary -- history is now %d messages",
+				result.MessagesBefore-result.MessagesAfter+1, result.TokensBefore, result.MessagesAfter,
+			)}
 		},
 	}
 }

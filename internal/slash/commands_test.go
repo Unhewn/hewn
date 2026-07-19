@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/unhewn/hewn/internal/agent"
+	"github.com/unhewn/hewn/internal/provider"
 	"github.com/unhewn/hewn/internal/sandbox"
 	"github.com/unhewn/hewn/internal/session"
 	"github.com/unhewn/hewn/internal/tool"
@@ -94,6 +95,60 @@ func TestModelCommand_ShowAndSet(t *testing.T) {
 	}
 }
 
+// fakeModelProvider implements just enough of provider.Provider to test
+// the /model and /models Choices path -- Stream is never called by any
+// slash command, so it's left unimplemented.
+type fakeModelProvider struct {
+	models []provider.ModelInfo
+}
+
+func (p fakeModelProvider) Name() string { return "fake" }
+
+func (p fakeModelProvider) Models(context.Context) ([]provider.ModelInfo, error) {
+	return p.models, nil
+}
+
+func (p fakeModelProvider) Stream(context.Context, provider.Request) (provider.Stream, error) {
+	panic("not implemented: no slash command should call Stream")
+}
+
+func TestModelCommand_NoArgsOffersChoices(t *testing.T) {
+	c := newTestContext(t)
+	c.Loop.Provider = fakeModelProvider{models: []provider.ModelInfo{
+		{ID: "claude-opus-4-8"}, {ID: "claude-haiku-4-5"},
+	}}
+
+	result, handled := c.Registry.Dispatch(context.Background(), c, "/model")
+	if !handled {
+		t.Fatal("Dispatch(/model) handled = false")
+	}
+	if result.SelectCommand != "model" {
+		t.Errorf("SelectCommand = %q, want %q", result.SelectCommand, "model")
+	}
+	want := []string{"claude-opus-4-8", "claude-haiku-4-5"}
+	if len(result.Choices) != len(want) {
+		t.Fatalf("Choices = %v, want %v", result.Choices, want)
+	}
+	for i, id := range want {
+		if result.Choices[i] != id {
+			t.Errorf("Choices[%d] = %q, want %q", i, result.Choices[i], id)
+		}
+	}
+	if !strings.Contains(result.Output, "current model") || !strings.Contains(result.Output, "claude-opus-4-8") {
+		t.Errorf("Output = %q, want it to still carry the same info as plain text for non-picker frontends", result.Output)
+	}
+}
+
+func TestModelCommand_WithArgsNeverOffersChoices(t *testing.T) {
+	c := newTestContext(t)
+	c.Loop.Provider = fakeModelProvider{models: []provider.ModelInfo{{ID: "claude-opus-4-8"}}}
+
+	result, _ := c.Registry.Dispatch(context.Background(), c, "/model claude-haiku-4-5")
+	if result.Choices != nil {
+		t.Errorf("Choices = %v, want nil -- setting a model directly shouldn't open a picker", result.Choices)
+	}
+}
+
 func TestNewCommand_StartsFreshSession(t *testing.T) {
 	c := newTestContext(t)
 	ctx := context.Background()
@@ -139,14 +194,14 @@ func TestClearCommand_KeepsSameSession(t *testing.T) {
 	}
 }
 
-func TestCompactCommand_IsAStub(t *testing.T) {
+func TestCompactCommand_NoOpOnShortHistory(t *testing.T) {
 	c := newTestContext(t)
 	result, handled := c.Registry.Dispatch(context.Background(), c, "/compact")
 	if !handled {
 		t.Fatal("Dispatch(/compact) handled = false")
 	}
-	if !strings.Contains(result.Output, "isn't implemented") {
-		t.Errorf("/compact = %q, want it to say it's not implemented", result.Output)
+	if !strings.Contains(result.Output, "nothing to compact") {
+		t.Errorf("/compact = %q, want it to report there's nothing to compact yet (fresh context has no history)", result.Output)
 	}
 }
 

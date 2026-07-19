@@ -29,6 +29,16 @@ type Result struct {
 	// invariant #1) has no other way to learn that history and needs to
 	// clear its own display too.
 	ClearTranscript bool
+
+	// Choices, if non-empty, offers a list to pick from instead of just
+	// printing Output -- e.g. /model with no args listing models. A
+	// frontend that can render an interactive picker (the TUI) should
+	// present Choices and, on selection, dispatch "/<SelectCommand>
+	// <choice>" through the registry rather than showing Output. A
+	// frontend that can't (headless, --interactive) just falls back to
+	// Output, which already carries the same information as plain text.
+	Choices       []string
+	SelectCommand string
 }
 
 // Context is everything a Command needs to act.
