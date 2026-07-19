@@ -21,8 +21,15 @@ const (
 	// defaultBaseURL is a local Ollama instance's OpenAI-compatible
 	// endpoint, this session's confirmed first target. Point elsewhere
 	// (Nous Research, real OpenAI, llama.cpp's server) via OPENAI_BASE_URL.
-	defaultBaseURL   = "http://localhost:11434/v1"
-	defaultMaxTokens = 4096
+	defaultBaseURL = "http://localhost:11434/v1"
+	// defaultMaxTokens is generous headroom for reasoning-capable local
+	// models (gemma, deepseek-r1, qwq, etc.) that spend a large chunk of
+	// their token budget on hidden "reasoning" content before ever
+	// emitting a real answer -- 4096 was routinely exhausted entirely by
+	// reasoning, producing a turn with visible spinner activity and zero
+	// output. This is not a limit on how long an answer can be, only a
+	// safety cap; --max-tokens overrides it per run.
+	defaultMaxTokens = 16384
 )
 
 func init() {

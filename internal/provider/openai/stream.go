@@ -28,6 +28,7 @@ type wireChoice struct {
 
 type wireChunkDelta struct {
 	Content   string              `json:"content,omitempty"`
+	Reasoning string              `json:"reasoning,omitempty"`
 	ToolCalls []wireChunkToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -126,6 +127,9 @@ func (s *chunkStream) handleChunk(chunk wireChunk) {
 
 	choice := chunk.Choices[0]
 
+	if choice.Delta.Reasoning != "" {
+		s.pending = append(s.pending, provider.Event{Kind: provider.KindThinkingDelta, ThinkingDelta: choice.Delta.Reasoning})
+	}
 	if choice.Delta.Content != "" {
 		s.pending = append(s.pending, provider.Event{Kind: provider.KindTextDelta, TextDelta: choice.Delta.Content})
 	}
