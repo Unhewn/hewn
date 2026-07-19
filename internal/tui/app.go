@@ -7,6 +7,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -75,6 +76,13 @@ type Model struct {
 	pendingApproval *pendingApproval
 	lastKeyWasCtrlC bool
 
+	// pendingTurnText holds the user's message between Enter and the
+	// pre-flight estimate resolving -- the real Run doesn't start until
+	// then. Run and EstimateNextTurn both read/write Loop's history, so
+	// they cannot run concurrently against the same Loop; serializing
+	// estimate-then-send is what keeps that safe, not just a UX choice.
+	pendingTurnText string
+
 	picker *picker
 }
 
@@ -125,6 +133,43 @@ type (
 	approvalRequestMsg approvalRequest
 	tickMsg            struct{}
 )
+
+// estimateMsg carries the result of a pre-flight cost projection for the
+// turn that was just started, computed concurrently with the real request
+// rather than serialized in front of it -- the turn's tokens are already
+// fixed the moment it's sent, so racing the estimate against the response
+// costs nothing but produces the same number a strictly-before-send
+// estimate would.
+type estimateMsg struct {
+	est agent.Estimate
+	err error
+}
+
+// estimateNextTurnCmd runs in the background, alongside the real turn
+// (never in front of it -- see estimateMsg). The 5s timeout keeps a
+// misbehaving network from leaving the estimate silently pending forever;
+// nothing in this codepath needs cancellation tied to the real turn, since
+// it is a single short request, not a stream.
+func estimateNextTurnCmd(loop *agent.Loop, userMsg string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		est, err := loop.EstimateNextTurn(ctx, userMsg)
+		return estimateMsg{est: est, err: err}
+	}
+}
+
+// formatEstimate renders a pre-flight Estimate for the transcript. Both
+// costs are worst-case-on-input (no cache credit -- see Estimate's doc
+// comment); "typical" additionally has no basis to guess output length
+// until this session has a completed turn to average, so it's omitted
+// rather than shown as a fabricated number.
+func formatEstimate(est agent.Estimate) string {
+	if est.TypicalOutputTokens == 0 {
+		return fmt.Sprintf("~ %d input tokens · up to $%.4f for this turn", est.InputTokens, est.MaxCost)
+	}
+	return fmt.Sprintf("~$%.4f typical · up to $%.4f worst case for this turn", est.TypicalCost, est.MaxCost)
+}
 
 func waitForEvent(events <-chan agent.Event) tea.Cmd {
 	return func() tea.Msg {
@@ -190,6 +235,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingApproval = &pendingApproval{req: msg.req, response: msg.response}
 		m.state = stateAwaitingApproval
 		return m, waitForApproval(m.approver.requests)
+
+	case estimateMsg:
+		if msg.err == nil && msg.est.PricingKnown {
+			m.transcript = append(m.transcript, newSystemItem(formatEstimate(msg.est)))
+			m.flush()
+		}
+		text := m.pendingTurnText
+		m.pendingTurnText = ""
+		ctx, cancel := context.WithCancel(context.Background())
+		m.turnCancel = cancel
+		m.events = m.loop.Run(ctx, text)
+		return m, waitForEvent(m.events)
 
 	case tickMsg:
 		if m.dirty {
@@ -405,13 +462,15 @@ func (m Model) startTurnOrDispatch() (tea.Model, tea.Cmd) {
 	m.transcript = append(m.transcript, newUserItem(text))
 	m.flush()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.turnCancel = cancel
-	m.events = m.loop.Run(ctx, text)
+	// The real turn doesn't start until the estimate resolves (see
+	// pendingTurnText's doc comment) -- state flips to streaming here
+	// regardless, so the spinner and input-lock cover both phases as one
+	// continuous "working on it" from the user's perspective.
+	m.pendingTurnText = text
 	m.state = stateStreaming
 	m.turnProducedOutput = false
 
-	return m, tea.Batch(waitForEvent(m.events), tick(), m.spinner.Tick)
+	return m, tea.Batch(estimateNextTurnCmd(m.loop, text), tick(), m.spinner.Tick)
 }
 
 // handleAgentEvent applies one agent.Event to the transcript. Cheap
@@ -567,8 +626,9 @@ func (m Model) View() string {
 	// where it's actually seen, not buried under the help line at the
 	// bottom or behind /cost.
 	totalUsage := m.loop.TotalUsage()
+	totalCost, costKnown := m.loop.TotalCost()
 	status := renderStatusBar(cw, m.loop.Model, m.cwd, m.loop.LastUsage().InputTokens, m.loop.ContextWindow,
-		totalUsage.InputTokens+totalUsage.OutputTokens, m.state, activity)
+		totalUsage.InputTokens+totalUsage.OutputTokens, totalCost, costKnown, m.state, activity)
 	help := styleHelp.Render("PgUp/PgDn or mouse wheel scroll • Enter send • /command • ctrl+o expand • ctrl+c interrupt/quit")
 	if m.state == statePicker {
 		help = styleHelp.Render("↑/↓ navigate • type to filter • enter select • esc cancel")

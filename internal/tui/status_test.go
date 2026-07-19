@@ -21,9 +21,9 @@ func TestFormatContextTokens_KnownWindowShowsPercentage(t *testing.T) {
 }
 
 func TestRenderStatusBar_WarnsPastThreshold(t *testing.T) {
-	under := renderStatusBar(80, "m", "/cwd", 50000, 100000, 0, stateIdle, "") // 50%
-	over := renderStatusBar(80, "m", "/cwd", 80000, 100000, 0, stateIdle, "")  // 80%
-	unknown := renderStatusBar(80, "m", "/cwd", 80000, 0, 0, stateIdle, "")    // no window configured
+	under := renderStatusBar(80, "m", "/cwd", 50000, 100000, 0, 0, false, stateIdle, "") // 50%
+	over := renderStatusBar(80, "m", "/cwd", 80000, 100000, 0, 0, false, stateIdle, "")  // 80%
+	unknown := renderStatusBar(80, "m", "/cwd", 80000, 0, 0, 0, false, stateIdle, "")    // no window configured
 
 	if under == over {
 		t.Error("status bar rendered identically under and over the warning threshold -- color branch never took effect")
@@ -34,8 +34,20 @@ func TestRenderStatusBar_WarnsPastThreshold(t *testing.T) {
 }
 
 func TestRenderStatusBar_ShowsCumulativeSessionTotal(t *testing.T) {
-	bar := renderStatusBar(80, "m", "/cwd", 0, 0, 42100, stateIdle, "")
+	bar := renderStatusBar(80, "m", "/cwd", 0, 0, 42100, 0, false, stateIdle, "")
 	if !strings.Contains(bar, "Σ42.1k") {
 		t.Errorf("status bar = %q, want it to show the cumulative session total (Σ42.1k)", bar)
+	}
+}
+
+func TestRenderStatusBar_ShowsCostWhenKnown(t *testing.T) {
+	known := renderStatusBar(80, "m", "/cwd", 0, 0, 1000, 0.0842, true, stateIdle, "")
+	if !strings.Contains(known, "$0.0842") {
+		t.Errorf("status bar = %q, want it to show the known cumulative cost ($0.0842)", known)
+	}
+
+	unknown := renderStatusBar(80, "m", "/cwd", 0, 0, 1000, 0, false, stateIdle, "")
+	if strings.Contains(unknown, "$") {
+		t.Errorf("status bar = %q, want no $ figure when cost is unknown (local/unpriced model)", unknown)
 	}
 }

@@ -197,13 +197,19 @@ func toolsCommand() Command {
 func costCommand() Command {
 	return Command{
 		Name:        "cost",
-		Description: "show cumulative token usage for this session",
+		Description: "show cumulative token usage and dollar cost for this session",
 		Run: func(_ context.Context, c *Context, _ string) Result {
 			u := c.Loop.TotalUsage()
-			return Result{Output: fmt.Sprintf(
+			out := fmt.Sprintf(
 				"input: %d, output: %d, cache read: %d, cache write: %d",
 				u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens,
-			)}
+			)
+			if cost, known := c.Loop.TotalCost(); known {
+				out += fmt.Sprintf(" -- $%.4f total", cost)
+			} else {
+				out += " -- no pricing known for this model"
+			}
+			return Result{Output: out}
 		},
 	}
 }

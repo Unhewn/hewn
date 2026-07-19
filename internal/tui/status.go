@@ -44,9 +44,16 @@ const contextWarnRatio = 0.75
 // shown as a bare count unless contextWindow is known (Loop.ContextWindow,
 // an opt-in config value) since Hewn has no general way to discover a
 // model's real limit; totalTokens is the cumulative input+output for the
-// whole session, same number /cost reports.
-func renderStatusBar(width int, model, cwd string, contextTokens, contextWindow, totalTokens int, state appState, activity string) string {
-	left := fmt.Sprintf(" hewn · %s · %s · %s · Σ%.1fk ", model, cwd, formatContextTokens(contextTokens, contextWindow), float64(totalTokens)/1000)
+// whole session, same number /cost reports. totalCost is omitted entirely
+// (not shown as $0.00) when costKnown is false -- a local/unpriced model
+// genuinely has no dollar figure to report, and showing zero would read as
+// "this is free" rather than unknown.
+func renderStatusBar(width int, model, cwd string, contextTokens, contextWindow, totalTokens int, totalCost float64, costKnown bool, state appState, activity string) string {
+	left := fmt.Sprintf(" hewn · %s · %s · %s · Σ%.1fk", model, cwd, formatContextTokens(contextTokens, contextWindow), float64(totalTokens)/1000)
+	if costKnown {
+		left += fmt.Sprintf(" · $%.4f", totalCost)
+	}
+	left += " "
 	right := fmt.Sprintf(" %s%s ", activity, state)
 
 	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
