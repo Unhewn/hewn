@@ -117,6 +117,17 @@ func main() {
 			// Resolve DB path to an absolute path (or the default).
 			cfg.DB = config.ResolveDB(cfg.DB)
 
+			// Check if we have a working provider. If not, run the setup
+			// wizard (skipped in headless mode — shows an error instead).
+			promptFlag, _ := cmd.Flags().GetString("prompt")
+			isHeadless := promptFlag != ""
+			var resolvedCfg *config.Config
+			resolvedCfg, err = config.CheckOrSetup(&cfg, isHeadless)
+			if err != nil {
+				return fmt.Errorf("hewn: %w", err)
+			}
+			cfg = *resolvedCfg
+
 			interactive, _ := cmd.Flags().GetBool("interactive")
 			if interactive {
 				return runInteractive(cmd, &cfg)

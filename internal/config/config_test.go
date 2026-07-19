@@ -18,6 +18,18 @@ func TestDefaults(t *testing.T) {
 }
 
 func TestLoadMissingFile(t *testing.T) {
+	// Use a temp HOME so the user's real ~/.config/hewn/config.yaml
+	// doesn't interfere.
+	home := t.TempDir()
+	origHOME := os.Getenv("HOME")
+	origUP := os.Getenv("USERPROFILE")
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+	defer func() {
+		os.Setenv("HOME", origHOME)
+		os.Setenv("USERPROFILE", origUP)
+	}()
+
 	cfg, err := Load("/nonexistent")
 	if err != nil {
 		t.Fatalf("Load(nonexistent): %v", err)
@@ -28,6 +40,16 @@ func TestLoadMissingFile(t *testing.T) {
 }
 
 func TestLoadEmptyFile(t *testing.T) {
+	home := t.TempDir()
+	origHOME := os.Getenv("HOME")
+	origUP := os.Getenv("USERPROFILE")
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+	defer func() {
+		os.Setenv("HOME", origHOME)
+		os.Setenv("USERPROFILE", origUP)
+	}()
+
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "config.yaml"), []byte{}, 0644)
 

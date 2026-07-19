@@ -16,17 +16,54 @@ go build -o hewn ./cmd/hewn
 go run ./cmd/hewn
 ```
 
-With no flags and no config file, this opens the TUI using Anthropic's API, so `ANTHROPIC_API_KEY` must be set:
+### First run
+
+The first time you run `hewn` with no flags, you'll see a setup wizard
+that walks you through choosing a provider:
+
+```
+  ╭─────────────────────────────────────╮
+  │                                     │
+  │   Welcome to Hewn!                  │
+  │   Let's get you set up.             │
+  │                                     │
+  ╰─────────────────────────────────────╯
+
+  Choose a provider:
+
+  1. Ollama (local, free)
+     Run models on your own machine. No API key needed.
+
+  2. Anthropic (Claude)
+     Claude Opus 4, Sonnet 4, and Haiku. Requires an API key.
+
+  3. OpenAI (GPT)
+     GPT-4o, GPT-4.1, o-series. Requires an API key.
+
+  4. Other OpenAI-compatible
+     Any OpenAI-compatible backend.
+
+  5. Manual
+     Skip the wizard. Configure everything yourself.
+
+  Enter a number (1-5):
+```
+
+Pick a provider, paste an API key if needed, and Hewn writes the
+config and starts. After that, you just run `hewn` and go.
+
+### Starting the TUI
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
 hewn
 ```
 
-### Modes
+That's it. If you've already run the setup wizard, it opens the TUI
+with your configured provider and model.
+
+### Other modes
 
 ```bash
-hewn                       # TUI (no -p, no --interactive)
 hewn -p "prompt"           # headless: run one prompt and exit
 hewn --interactive         # REPL: slash commands + turns, no TUI
 hewn --list                # list recent sessions and exit
@@ -34,71 +71,33 @@ hewn --resume              # resume the most recent session
 hewn --resume=<id-or-prefix>  # resume a specific session (the = is required)
 ```
 
-### Config file
+### Using a local model (Ollama, llama.cpp, LM Studio)
 
-Default settings can be saved to `~/.config/hewn/config.yaml` so you don't
-have to pass `--provider` and `--model` every time:
+Hewn's `openai` provider speaks the OpenAI-compatible Chat Completions
+format that Ollama, llama.cpp's server, LM Studio, and similar local
+backends all expose.
+
+Pick option 1 in the setup wizard and you're done. Or configure it
+manually — create `~/.config/hewn/config.yaml`:
 
 ```yaml
 provider: openai
 model: gemma4:12b
 ```
 
-Project-level overrides go in `.hewn/config.yaml` under your project
-directory and take precedence over the user-level config. CLI flags still
-win over everything.
-
-Environment variable credentials (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`OPENAI_BASE_URL`) are never stored in config files.
-
-### Using a local model (Ollama, llama.cpp, LM Studio)
-
-Hewn's `openai` provider speaks the OpenAI-compatible Chat Completions
-format that Ollama, llama.cpp's server, LM Studio, and similar local
-backends all expose. To use it:
-
-```bash
-# One-off (no config file):
-OPENAI_API_KEY=not-needed hewn --provider openai --model gemma4:12b
-
-# Or with a persistent config:
-# ~/.config/hewn/config.yaml:
-#   provider: openai
-#   model: gemma4:12b
-OPENAI_API_KEY=not-needed hewn
-```
-
 `OPENAI_BASE_URL` defaults to `http://localhost:11434/v1` — Ollama's
-OpenAI-compatible endpoint. If your local backend runs on a different port
-or address, set the env var:
+OpenAI-compatible endpoint. Set it if your backend runs elsewhere.
 
-```bash
-export OPENAI_BASE_URL=http://localhost:8080/v1
-```
-
-`OPENAI_API_KEY` must be set to something non-empty (Hewn checks for it),
-but Ollama and most local backends don't validate the value. Set it to
-any string:
+`OPENAI_API_KEY` must be set to something non-empty, but Ollama and
+most local backends don't validate it:
 
 ```bash
 export OPENAI_API_KEY=not-needed
 hewn
 ```
 
-#### Starting the TUI with a local model
-
-Just run `hewn` with no `-p` flag. With a config file pointing at
-`openai`/`gemma4:12b`, the TUI opens immediately:
-
-```bash
-OPENAI_API_KEY=not-needed hewn
-```
-
-With no config, pass the flags explicitly:
-
-```bash
-OPENAI_API_KEY=not-needed hewn --provider openai --model gemma4:12b
-```
+For a permanent setup, run the wizard and pick option 1. It writes the
+config for you — you'll only need the env var from then on.
 
 ### Flags
 

@@ -26,6 +26,8 @@ type Config struct {
 	CWD      string `yaml:"cwd"`
 	NoTools  bool   `yaml:"no-tools"`
 	Yolo     bool   `yaml:"yolo"`
+	APIKey   string `yaml:"api-key,omitempty"`
+	BaseURL  string `yaml:"base-url,omitempty"`
 }
 
 // Load layered configuration: user config first, then project config
@@ -164,6 +166,12 @@ func merge(dst *Config, src Config) {
 	}
 	if src.Yolo {
 		dst.Yolo = true
+	}
+	if src.APIKey != "" {
+		dst.APIKey = src.APIKey
+	}
+	if src.BaseURL != "" {
+		dst.BaseURL = src.BaseURL
 	}
 }
 
