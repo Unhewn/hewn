@@ -16,7 +16,7 @@ go build -o hewn ./cmd/hewn
 go run ./cmd/hewn
 ```
 
-With no flags, this opens the TUI in the current directory using Anthropic's API, so `ANTHROPIC_API_KEY` must be set:
+With no flags and no config file, this opens the TUI using Anthropic's API, so `ANTHROPIC_API_KEY` must be set:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -26,7 +26,7 @@ hewn
 ### Modes
 
 ```bash
-hewn                       # TUI
+hewn                       # TUI (no -p, no --interactive)
 hewn -p "prompt"           # headless: run one prompt and exit
 hewn --interactive         # REPL: slash commands + turns, no TUI
 hewn --list                # list recent sessions and exit
@@ -34,15 +34,71 @@ hewn --resume              # resume the most recent session
 hewn --resume=<id-or-prefix>  # resume a specific session (the = is required)
 ```
 
-### Using a local model instead
+### Config file
 
-To run against an OpenAI-compatible backend (Ollama, llama.cpp's server, LM Studio, or any hosted OpenAI-compatible API) instead of Anthropic:
+Default settings can be saved to `~/.config/hewn/config.yaml` so you don't
+have to pass `--provider` and `--model` every time:
 
-```bash
-hewn --provider openai --model <model-name>
+```yaml
+provider: openai
+model: gemma4:12b
 ```
 
-`OPENAI_BASE_URL` defaults to `http://localhost:11434/v1` (a local Ollama instance); set it to point elsewhere. `OPENAI_API_KEY` is optional — omit it for backends like Ollama that don't require auth.
+Project-level overrides go in `.hewn/config.yaml` under your project
+directory and take precedence over the user-level config. CLI flags still
+win over everything.
+
+Environment variable credentials (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`OPENAI_BASE_URL`) are never stored in config files.
+
+### Using a local model (Ollama, llama.cpp, LM Studio)
+
+Hewn's `openai` provider speaks the OpenAI-compatible Chat Completions
+format that Ollama, llama.cpp's server, LM Studio, and similar local
+backends all expose. To use it:
+
+```bash
+# One-off (no config file):
+OPENAI_API_KEY=not-needed hewn --provider openai --model gemma4:12b
+
+# Or with a persistent config:
+# ~/.config/hewn/config.yaml:
+#   provider: openai
+#   model: gemma4:12b
+OPENAI_API_KEY=not-needed hewn
+```
+
+`OPENAI_BASE_URL` defaults to `http://localhost:11434/v1` — Ollama's
+OpenAI-compatible endpoint. If your local backend runs on a different port
+or address, set the env var:
+
+```bash
+export OPENAI_BASE_URL=http://localhost:8080/v1
+```
+
+`OPENAI_API_KEY` must be set to something non-empty (Hewn checks for it),
+but Ollama and most local backends don't validate the value. Set it to
+any string:
+
+```bash
+export OPENAI_API_KEY=not-needed
+hewn
+```
+
+#### Starting the TUI with a local model
+
+Just run `hewn` with no `-p` flag. With a config file pointing at
+`openai`/`gemma4:12b`, the TUI opens immediately:
+
+```bash
+OPENAI_API_KEY=not-needed hewn
+```
+
+With no config, pass the flags explicitly:
+
+```bash
+OPENAI_API_KEY=not-needed hewn --provider openai --model gemma4:12b
+```
 
 ### Flags
 
@@ -50,8 +106,8 @@ hewn --provider openai --model <model-name>
 |---|---|---|
 | `-p, --prompt` | | run one prompt headless and exit |
 | `--interactive` | `false` | run an interactive REPL (`/help` for slash commands) |
-| `--provider` | `anthropic` | `anthropic` or `openai` (any OpenAI-compatible backend) |
-| `--model` | `claude-opus-4-8` | model name; must be one your `--provider` actually serves |
+| `--provider` | *(config > defaults)* | `anthropic` or `openai` (any OpenAI-compatible backend) |
+| `--model` | *(config > defaults)* | model name; must be one your `--provider` actually serves |
 | `--cwd` | current directory | project directory the agent reads/edits/runs commands in |
 | `--no-tools` | `false` | disable tool use, including any configured MCP servers |
 | `--yolo` | `false` | pre-approve every tool call for this run |
