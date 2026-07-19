@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -348,6 +349,160 @@ func TestLoop_TotalUsageAccumulates(t *testing.T) {
 	want := Usage{InputTokens: 30, OutputTokens: 10, CacheReadTokens: 4, CacheWriteTokens: 6}
 	if got := l.TotalUsage(); got != want {
 		t.Errorf("TotalUsage() after two turns = %+v, want %+v", got, want)
+	}
+}
+
+func TestLoop_TotalCost(t *testing.T) {
+	p := &fakeProvider{turns: [][]provider.Event{
+		{
+			{Kind: provider.KindTextDelta, TextDelta: "one"},
+			// 1000 input, 1000 output at claude-opus-4-8 rates ($5/$25 per M) = $0.005 + $0.025 = $0.03
+			{Kind: provider.KindUsage, Usage: provider.Usage{InputTokens: 1000, OutputTokens: 1000}},
+			{Kind: provider.KindStopReason, StopReason: provider.StopReasonEndTurn},
+		},
+	}}
+
+	l := &Loop{
+		Provider: p,
+		Tools:    tool.NewRegistry(),
+		Approval: tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false),
+		Model:    "claude-opus-4-8",
+	}
+
+	if _, known := l.TotalCost(); known {
+		t.Fatal("TotalCost() before any turn should report known=false")
+	}
+
+	drainEvents(l.Run(context.Background(), "hello"))
+
+	cost, known := l.TotalCost()
+	if !known {
+		t.Fatal("TotalCost() after a priced turn should report known=true")
+	}
+	if want := 0.03; !costEqual(cost, want) {
+		t.Errorf("TotalCost() = %v, want %v", cost, want)
+	}
+}
+
+func TestLoop_TotalCost_UnknownModel(t *testing.T) {
+	p := &fakeProvider{turns: [][]provider.Event{
+		{
+			{Kind: provider.KindTextDelta, TextDelta: "one"},
+			{Kind: provider.KindUsage, Usage: provider.Usage{InputTokens: 1000, OutputTokens: 1000}},
+			{Kind: provider.KindStopReason, StopReason: provider.StopReasonEndTurn},
+		},
+	}}
+
+	l := &Loop{
+		Provider: p,
+		Tools:    tool.NewRegistry(),
+		Approval: tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false),
+		Model:    "gemma3:12b",
+	}
+
+	drainEvents(l.Run(context.Background(), "hello"))
+
+	if cost, known := l.TotalCost(); known || cost != 0 {
+		t.Errorf("TotalCost() for an unpriced model = (%v, %v), want (0, false)", cost, known)
+	}
+}
+
+func TestLoop_EstimateNextTurn(t *testing.T) {
+	p := &fakeProvider{countTokens: 500}
+
+	l := &Loop{
+		Provider:  p,
+		Tools:     tool.NewRegistry(),
+		Approval:  tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false),
+		Model:     "claude-opus-4-8",
+		MaxTokens: 4000,
+	}
+
+	est, err := l.EstimateNextTurn(context.Background(), "how do I do X?")
+	if err != nil {
+		t.Fatalf("EstimateNextTurn: %v", err)
+	}
+	if !est.PricingKnown {
+		t.Fatal("PricingKnown = false, want true for a known model")
+	}
+	if est.InputTokens != 500 {
+		t.Errorf("InputTokens = %d, want 500", est.InputTokens)
+	}
+	if est.TypicalOutputTokens != 0 {
+		t.Errorf("TypicalOutputTokens = %d, want 0 before any completed turn", est.TypicalOutputTokens)
+	}
+	if est.MaxOutputTokens != 4000 {
+		t.Errorf("MaxOutputTokens = %d, want 4000", est.MaxOutputTokens)
+	}
+	// 500 input + 4000 output at $5/$25 per M = $0.0025 + $0.1 = $0.1025
+	if want := 0.1025; !costEqual(est.MaxCost, want) {
+		t.Errorf("MaxCost = %v, want %v", est.MaxCost, want)
+	}
+	// TypicalOutputTokens is 0 before any completed turn, but the input
+	// tokens are still real and still priced: 500 input at $5/M = $0.0025.
+	if want := 0.0025; !costEqual(est.TypicalCost, want) {
+		t.Errorf("TypicalCost = %v, want %v (input-only, no output history yet)", est.TypicalCost, want)
+	}
+
+	// EstimateNextTurn must not mutate history or send anything real.
+	if len(l.history) != 0 {
+		t.Errorf("history length = %d, want 0 -- EstimateNextTurn must not mutate history", len(l.history))
+	}
+
+	// A real turn establishes an average, which subsequent estimates use.
+	p.turns = [][]provider.Event{{
+		{Kind: provider.KindTextDelta, TextDelta: "answer"},
+		{Kind: provider.KindUsage, Usage: provider.Usage{InputTokens: 400, OutputTokens: 800}},
+		{Kind: provider.KindStopReason, StopReason: provider.StopReasonEndTurn},
+	}}
+	drainEvents(l.Run(context.Background(), "how do I do X?"))
+
+	est2, err := l.EstimateNextTurn(context.Background(), "and now Y?")
+	if err != nil {
+		t.Fatalf("EstimateNextTurn after a turn: %v", err)
+	}
+	if est2.TypicalOutputTokens != 800 {
+		t.Errorf("TypicalOutputTokens = %d, want 800 (this session's one completed turn)", est2.TypicalOutputTokens)
+	}
+}
+
+func TestLoop_EstimateNextTurn_UnknownModel(t *testing.T) {
+	p := &fakeProvider{countTokens: 500}
+
+	l := &Loop{
+		Provider: p,
+		Tools:    tool.NewRegistry(),
+		Approval: tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false),
+		Model:    "gemma3:12b",
+	}
+
+	est, err := l.EstimateNextTurn(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("EstimateNextTurn: %v", err)
+	}
+	if est.PricingKnown {
+		t.Fatal("PricingKnown = true, want false for an unpriced model")
+	}
+	if est.InputTokens != 500 {
+		t.Errorf("InputTokens = %d, want 500 (token count is still reported even when pricing is unknown)", est.InputTokens)
+	}
+	if est.MaxCost != 0 || est.TypicalCost != 0 {
+		t.Errorf("costs = (%v, %v), want (0, 0) for an unpriced model", est.TypicalCost, est.MaxCost)
+	}
+}
+
+func TestLoop_EstimateNextTurn_CountTokensError(t *testing.T) {
+	p := &fakeProvider{countTokensErr: errors.New("provider unavailable")}
+
+	l := &Loop{
+		Provider: p,
+		Tools:    tool.NewRegistry(),
+		Approval: tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false),
+		Model:    "claude-opus-4-8",
+	}
+
+	if _, err := l.EstimateNextTurn(context.Background(), "hello"); err == nil {
+		t.Fatal("EstimateNextTurn should return an error when CountTokens fails")
 	}
 }
 

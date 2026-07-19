@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/unhewn/hewn/internal/pricing"
 	"github.com/unhewn/hewn/internal/provider"
 	"github.com/unhewn/hewn/internal/session"
 	"github.com/unhewn/hewn/internal/tool"
@@ -44,6 +45,20 @@ type Loop struct {
 	history    []provider.Message
 	totalUsage Usage
 	lastUsage  Usage
+
+	turnCount int     // completed turns with usage reported, for EstimateNextTurn's average
+	totalCost float64 // running $ total, priced at each turn's active model
+	costKnown bool    // true once any turn priced successfully; false means Model was never a priced model
+}
+
+// TotalCost returns the cumulative dollar cost of every turn this loop has
+// run so far, priced at each turn's active model and rates in effect at
+// the time (a later /model switch does not retroactively reprice earlier
+// turns). ok is false if no turn so far ran against a model pricing knows
+// -- e.g. a session run entirely against a local Ollama model, which has
+// no meaningful $ cost.
+func (l *Loop) TotalCost() (float64, bool) {
+	return l.totalCost, l.costKnown
 }
 
 // TotalUsage returns the cumulative token usage across every turn this
@@ -160,6 +175,11 @@ func (l *Loop) step(ctx context.Context, events chan<- Event) (provider.StopReas
 				CacheReadTokens:  ev.Usage.CacheReadTokens,
 				CacheWriteTokens: ev.Usage.CacheWriteTokens,
 			}
+			l.turnCount++
+			if rates, ok := pricing.Lookup(l.Model); ok {
+				l.totalCost += rates.Cost(ev.Usage.InputTokens, ev.Usage.OutputTokens, ev.Usage.CacheReadTokens, ev.Usage.CacheWriteTokens)
+				l.costKnown = true
+			}
 			events <- NewUsage(Usage{
 				InputTokens:      ev.Usage.InputTokens,
 				OutputTokens:     ev.Usage.OutputTokens,
@@ -248,9 +268,17 @@ func (l *Loop) executeOne(ctx context.Context, c toolCall, events chan<- Event) 
 // Two breakpoints total, safely under Anthropic's 4-per-request cap;
 // providers without cache_control support just ignore the marker.
 func (l *Loop) buildRequest() provider.Request {
+	return l.buildRequestWithHistory(l.history)
+}
+
+// buildRequestWithHistory is buildRequest parameterized on the message
+// history to send, so EstimateNextTurn can price a hypothetical next turn
+// against the exact request shape buildRequest would produce, without
+// mutating l.history to do it.
+func (l *Loop) buildRequestWithHistory(history []provider.Message) provider.Request {
 	req := provider.Request{
 		Model:     l.Model,
-		Messages:  withLastBlockCacheable(l.history),
+		Messages:  withLastBlockCacheable(history),
 		Tools:     l.toolDefs(),
 		MaxTokens: l.MaxTokens,
 	}
@@ -258,6 +286,55 @@ func (l *Loop) buildRequest() provider.Request {
 		req.System = []provider.ContentBlock{{Kind: provider.ContentText, Text: l.System, Cacheable: true}}
 	}
 	return req
+}
+
+// Estimate is a pre-flight cost projection for a turn, computed before it
+// is sent. InputTokens is exact for a provider with a real counting
+// endpoint (Anthropic) and an approximation otherwise (provider.Provider's
+// CountTokens contract). Both costs price InputTokens at full input rate,
+// deliberately never crediting a prompt-cache discount: Hewn cannot know
+// ahead of time whether the request will actually hit cache, and the
+// useful number before committing to send is the conservative one --
+// what you'd actually pay in the worst case, not an optimistic guess.
+type Estimate struct {
+	InputTokens         int
+	TypicalOutputTokens int // 0 until this session has a completed turn to average
+	MaxOutputTokens     int // 0 if MaxTokens is unset
+	TypicalCost         float64
+	MaxCost             float64
+	PricingKnown        bool // false for a local/unpriced model -- both costs are 0 in that case
+}
+
+// EstimateNextTurn projects the cost of sending userMsg as the next turn,
+// without mutating history or sending anything. InputTokens comes from the
+// provider's CountTokens on the exact request buildRequest would build for
+// this message; output is bounded between this session's average
+// completed-turn size (Typical) and MaxTokens (Max).
+func (l *Loop) EstimateNextTurn(ctx context.Context, userMsg string) (Estimate, error) {
+	hypothetical := append(append([]provider.Message(nil), l.history...), provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.ContentBlock{{Kind: provider.ContentText, Text: userMsg}},
+	})
+
+	inputTokens, err := l.Provider.CountTokens(ctx, l.buildRequestWithHistory(hypothetical))
+	if err != nil {
+		return Estimate{}, fmt.Errorf("agent: estimate: %w", err)
+	}
+
+	rates, known := pricing.Lookup(l.Model)
+	est := Estimate{InputTokens: inputTokens, PricingKnown: known}
+	if !known {
+		return est, nil
+	}
+
+	if l.turnCount > 0 {
+		est.TypicalOutputTokens = l.totalUsage.OutputTokens / l.turnCount
+	}
+	est.MaxOutputTokens = l.MaxTokens
+
+	est.TypicalCost = rates.Cost(inputTokens, est.TypicalOutputTokens, 0, 0)
+	est.MaxCost = rates.Cost(inputTokens, est.MaxOutputTokens, 0, 0)
+	return est, nil
 }
 
 // withLastBlockCacheable returns a copy of messages with the last content
