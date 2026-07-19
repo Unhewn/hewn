@@ -130,12 +130,13 @@ func main() {
 		},
 	}
 
-	rootCmd.Flags().StringVarP(&flagProvider, "provider", "p", "", `provider to use: "anthropic" or "openai" (any OpenAI-compatible backend -- Ollama, llama.cpp, LM Studio, Nous Research, OpenAI itself -- via OPENAI_BASE_URL and OPENAI_API_KEY). Default taken from config; first fallback is "anthropic."`)
+	rootCmd.Flags().StringVar(&flagProvider, "provider", "", `provider to use: "anthropic" or "openai" (any OpenAI-compatible backend -- Ollama, llama.cpp, LM Studio, Nous Research, OpenAI itself -- via OPENAI_BASE_URL and OPENAI_API_KEY). Default taken from config; first fallback is "anthropic."`)
 	rootCmd.Flags().StringVar(&flagModel, "model", "", "model to use (overrides config; default from config, or claude-opus-4-8)")
 	rootCmd.Flags().StringVar(&flagCWD, "cwd", "", "project directory (default: current directory)")
 	rootCmd.Flags().StringVar(&flagDB, "db", "", "session database path (default: ~/.local/share/hewn/hewn.db)")
 	rootCmd.Flags().BoolVar(&flagNoTools, "no-tools", false, "disable tool use")
 	rootCmd.Flags().BoolVar(&flagYolo, "yolo", false, "pre-approve every tool call for this run")
+	rootCmd.Flags().StringP("prompt", "p", "", "run a prompt headless and exit")
 	rootCmd.Flags().Bool("list", false, "list recent sessions and exit")
 	rootCmd.Flags().String("resume", "", `resume a session: bare flag resumes the most recent, or --resume=<id-or-prefix> for a specific one (the = is required)`)
 	rootCmd.Flags().Lookup("resume").NoOptDefVal = resumeLatest
