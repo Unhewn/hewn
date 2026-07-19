@@ -8,7 +8,7 @@ import (
 )
 
 func TestToWireRequest_SystemPromptBecomesAMessage(t *testing.T) {
-	req := provider.Request{Model: "qwen2.5", System: "be terse"}
+	req := provider.Request{Model: "qwen2.5", System: []provider.ContentBlock{{Kind: provider.ContentText, Text: "be terse"}}}
 	wr := toWireRequest(req)
 
 	if len(wr.Messages) != 1 || wr.Messages[0].Role != "system" || wr.Messages[0].Content != "be terse" {

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/unhewn/hewn/internal/provider"
 )
@@ -66,8 +67,8 @@ func toWireRequest(req provider.Request) wireRequest {
 		StreamOptions: &wireStreamOptions{IncludeUsage: true},
 	}
 
-	if req.System != "" {
-		wr.Messages = append(wr.Messages, wireMessage{Role: "system", Content: req.System})
+	if system := systemText(req.System); system != "" {
+		wr.Messages = append(wr.Messages, wireMessage{Role: "system", Content: system})
 	}
 	for _, m := range req.Messages {
 		wr.Messages = append(wr.Messages, toWireMessages(m)...)
@@ -80,6 +81,20 @@ func toWireRequest(req provider.Request) wireRequest {
 	}
 
 	return wr
+}
+
+// systemText concatenates the text of every system content block into one
+// plain string. This backend has no cache_control equivalent (OpenAI and
+// most OpenAI-compatible backends cache automatically, with no explicit
+// breakpoint needed), so a Cacheable marker on any block is simply ignored.
+func systemText(blocks []provider.ContentBlock) string {
+	var b strings.Builder
+	for _, c := range blocks {
+		if c.Kind == provider.ContentText {
+			b.WriteString(c.Text)
+		}
+	}
+	return b.String()
 }
 
 // toWireMessages translates one neutral Message. An assistant message

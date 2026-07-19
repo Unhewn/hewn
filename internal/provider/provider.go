@@ -79,6 +79,12 @@ type ContentBlock struct {
 	ToolResultID      string
 	ToolResultContent string
 	ToolResultIsError bool
+
+	// Cacheable marks this block as a good prompt-caching breakpoint: a
+	// prefix of the request that's stable and worth reusing across calls.
+	// A provider that doesn't support explicit cache breakpoints (the
+	// OpenAI-compatible one) just ignores it.
+	Cacheable bool
 }
 
 // Message is one neutral turn of conversation history.
@@ -95,10 +101,13 @@ type ToolDef struct {
 	InputSchema json.RawMessage
 }
 
-// Request is one neutral turn request.
+// Request is one neutral turn request. System is content blocks rather
+// than a bare string so it can carry a Cacheable breakpoint the same way
+// any other block can -- the system prompt is usually the most stable,
+// most reusable part of a request.
 type Request struct {
 	Model     string
-	System    string
+	System    []ContentBlock
 	Messages  []Message
 	Tools     []ToolDef
 	MaxTokens int

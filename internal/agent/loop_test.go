@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -149,6 +151,149 @@ func TestLoop_SimpleText(t *testing.T) {
 	}
 	if l.history[1].Role != provider.RoleAssistant || l.history[1].Content[0].Text != "Hi there" {
 		t.Errorf("assistant message = %+v, want text %q", l.history[1], "Hi there")
+	}
+}
+
+func TestLoop_CacheBreakpoints(t *testing.T) {
+	p := &fakeProvider{turns: [][]provider.Event{
+		{
+			{Kind: provider.KindTextDelta, TextDelta: "one"},
+			{Kind: provider.KindStopReason, StopReason: provider.StopReasonEndTurn},
+		},
+		{
+			{Kind: provider.KindTextDelta, TextDelta: "two"},
+			{Kind: provider.KindStopReason, StopReason: provider.StopReasonEndTurn},
+		},
+	}}
+
+	l := &Loop{
+		Provider: p,
+		Tools:    tool.NewRegistry(),
+		Approval: tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false),
+		Model:    "test-model",
+		System:   "be terse",
+	}
+
+	drainEvents(l.Run(context.Background(), "first"))
+
+	req := p.lastRequest
+	if len(req.System) != 1 || !req.System[0].Cacheable || req.System[0].Text != "be terse" {
+		t.Fatalf("System = %+v, want one cacheable block with the system prompt", req.System)
+	}
+	lastMsg := req.Messages[len(req.Messages)-1]
+	lastBlock := lastMsg.Content[len(lastMsg.Content)-1]
+	if !lastBlock.Cacheable {
+		t.Errorf("last block of last message = %+v, want Cacheable", lastBlock)
+	}
+
+	// The breakpoint must be a copy for the request, not a mutation of
+	// l.history itself -- otherwise every turn leaves one more permanent
+	// breakpoint behind, and Anthropic errors past 4 per request.
+	histLast := l.history[len(l.history)-1]
+	if histLast.Content[len(histLast.Content)-1].Cacheable {
+		t.Fatal("l.history itself was mutated -- the last block is marked Cacheable in history, not just in the request")
+	}
+
+	drainEvents(l.Run(context.Background(), "second"))
+
+	req2 := p.lastRequest
+	if len(req2.Messages) < 3 {
+		t.Fatalf("Messages = %+v, want at least 3 (first turn's user+assistant, second turn's user)", req2.Messages)
+	}
+	for i, m := range req2.Messages[:len(req2.Messages)-1] {
+		for _, c := range m.Content {
+			if c.Cacheable {
+				t.Errorf("message %d = %+v, want no stale breakpoint from an earlier turn", i, m)
+			}
+		}
+	}
+	newLast := req2.Messages[len(req2.Messages)-1]
+	if !newLast.Content[len(newLast.Content)-1].Cacheable {
+		t.Errorf("last message of turn 2 = %+v, want its last block Cacheable", newLast)
+	}
+}
+
+func TestLoop_Compact(t *testing.T) {
+	p := &fakeProvider{turns: [][]provider.Event{
+		{
+			{Kind: provider.KindTextDelta, TextDelta: "summary of everything"},
+			{Kind: provider.KindUsage, Usage: provider.Usage{InputTokens: 50, OutputTokens: 5}},
+			{Kind: provider.KindStopReason, StopReason: provider.StopReasonEndTurn},
+		},
+	}}
+
+	l := &Loop{
+		Provider: p,
+		Tools:    tool.NewRegistry(),
+		Approval: tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false),
+		Model:    "test-model",
+	}
+
+	var history []provider.Message
+	for i := 0; i < 10; i++ {
+		role := provider.RoleUser
+		if i%2 == 1 {
+			role = provider.RoleAssistant
+		}
+		history = append(history, provider.Message{
+			Role:    role,
+			Content: []provider.ContentBlock{{Kind: provider.ContentText, Text: fmt.Sprintf("msg %d", i)}},
+		})
+	}
+	l.SeedHistory(history)
+
+	result, err := l.Compact(context.Background(), 4)
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if result.MessagesBefore != 10 {
+		t.Errorf("MessagesBefore = %d, want 10", result.MessagesBefore)
+	}
+	if result.MessagesAfter != 5 { // 1 summary + 4 kept
+		t.Errorf("MessagesAfter = %d, want 5", result.MessagesAfter)
+	}
+	if result.TokensBefore != 50 {
+		t.Errorf("TokensBefore = %d, want 50", result.TokensBefore)
+	}
+
+	if len(l.history) != 5 {
+		t.Fatalf("l.history length = %d, want 5", len(l.history))
+	}
+	if !strings.Contains(l.history[0].Content[0].Text, "summary of everything") {
+		t.Errorf("history[0] = %+v, want the summary text", l.history[0])
+	}
+	if l.history[1].Content[0].Text != "msg 6" {
+		t.Errorf("history[1] = %+v, want msg 6 (first kept message)", l.history[1])
+	}
+	if l.history[4].Content[0].Text != "msg 9" {
+		t.Errorf("history[4] = %+v, want msg 9 (last message)", l.history[4])
+	}
+
+	if p.lastRequest.Tools != nil {
+		t.Errorf("summarization request had tools = %+v, want none -- Compact must not let the model call tools", p.lastRequest.Tools)
+	}
+
+	if got := l.TotalUsage(); got.InputTokens != 50 || got.OutputTokens != 5 {
+		t.Errorf("TotalUsage() = %+v, want the summarization call's tokens counted", got)
+	}
+}
+
+func TestLoop_Compact_NoOpUnderKeepRecent(t *testing.T) {
+	p := &fakeProvider{}
+	l := &Loop{Provider: p, Tools: tool.NewRegistry(), Approval: tool.NewPolicy(fixedApprover{decision: tool.DecisionDeny}, false), Model: "test-model"}
+	l.SeedHistory([]provider.Message{
+		{Role: provider.RoleUser, Content: []provider.ContentBlock{{Kind: provider.ContentText, Text: "hi"}}},
+	})
+
+	result, err := l.Compact(context.Background(), 4)
+	if err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if result.MessagesBefore != 1 || result.MessagesAfter != 1 {
+		t.Errorf("result = %+v, want a no-op (history already at/under keepRecent)", result)
+	}
+	if p.call != 0 {
+		t.Error("Compact called the provider even though there was nothing to summarize")
 	}
 }
 

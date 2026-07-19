@@ -31,17 +31,33 @@ type Loop struct {
 	System    string
 	MaxTokens int
 
+	// ContextWindow is the model's context size in tokens, if known -- set
+	// from config (the user's own knowledge of their model/provider limit;
+	// Hewn has no way to discover it, especially for a local model whose
+	// context size is whatever the user configured in Ollama). Zero means
+	// unknown; callers show the raw token count instead of a percentage.
+	ContextWindow int
+
 	Session   *session.Store
 	SessionID string
 
 	history    []provider.Message
 	totalUsage Usage
+	lastUsage  Usage
 }
 
 // TotalUsage returns the cumulative token usage across every turn this
 // loop has run so far.
 func (l *Loop) TotalUsage() Usage {
 	return l.totalUsage
+}
+
+// LastUsage returns the most recent turn's usage. InputTokens here is the
+// best available proxy for "how much is in context right now" -- unlike
+// TotalUsage, which sums every turn in the session and isn't representative
+// of current context size at all.
+func (l *Loop) LastUsage() Usage {
+	return l.lastUsage
 }
 
 // toolCall accumulates one tool-use content block across the
@@ -90,13 +106,7 @@ func (l *Loop) run(ctx context.Context, userMsg string, events chan<- Event) {
 // made, appends their results to history, and reports the stop reason the
 // model gave.
 func (l *Loop) step(ctx context.Context, events chan<- Event) (provider.StopReason, error) {
-	stream, err := l.Provider.Stream(ctx, provider.Request{
-		Model:     l.Model,
-		System:    l.System,
-		Messages:  l.history,
-		Tools:     l.toolDefs(),
-		MaxTokens: l.MaxTokens,
-	})
+	stream, err := l.Provider.Stream(ctx, l.buildRequest())
 	if err != nil {
 		return provider.StopReasonUnknown, fmt.Errorf("agent: start stream: %w", err)
 	}
@@ -144,6 +154,12 @@ func (l *Loop) step(ctx context.Context, events chan<- Event) (provider.StopReas
 			l.totalUsage.OutputTokens += ev.Usage.OutputTokens
 			l.totalUsage.CacheReadTokens += ev.Usage.CacheReadTokens
 			l.totalUsage.CacheWriteTokens += ev.Usage.CacheWriteTokens
+			l.lastUsage = Usage{
+				InputTokens:      ev.Usage.InputTokens,
+				OutputTokens:     ev.Usage.OutputTokens,
+				CacheReadTokens:  ev.Usage.CacheReadTokens,
+				CacheWriteTokens: ev.Usage.CacheWriteTokens,
+			}
 			events <- NewUsage(Usage{
 				InputTokens:      ev.Usage.InputTokens,
 				OutputTokens:     ev.Usage.OutputTokens,
@@ -223,6 +239,50 @@ func (l *Loop) executeOne(ctx context.Context, c toolCall, events chan<- Event) 
 		return tool.Result{Output: err.Error(), IsError: true}, decision, duration
 	}
 	return result, decision, duration
+}
+
+// buildRequest assembles one model call's Request, marking cacheable
+// breakpoints: the system prompt (rarely changes turn to turn) and the
+// last content block of the last history message (rolls the breakpoint
+// forward -- everything before it was already cached on the prior turn).
+// Two breakpoints total, safely under Anthropic's 4-per-request cap;
+// providers without cache_control support just ignore the marker.
+func (l *Loop) buildRequest() provider.Request {
+	req := provider.Request{
+		Model:     l.Model,
+		Messages:  withLastBlockCacheable(l.history),
+		Tools:     l.toolDefs(),
+		MaxTokens: l.MaxTokens,
+	}
+	if l.System != "" {
+		req.System = []provider.ContentBlock{{Kind: provider.ContentText, Text: l.System, Cacheable: true}}
+	}
+	return req
+}
+
+// withLastBlockCacheable returns a copy of messages with the last content
+// block of the last message marked Cacheable. It copies rather than
+// mutating in place: messages is l.history, shared across every future
+// turn, and must stay free of stale breakpoints from earlier turns.
+func withLastBlockCacheable(messages []provider.Message) []provider.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+
+	out := make([]provider.Message, len(messages))
+	copy(out, messages)
+
+	last := out[len(out)-1]
+	if len(last.Content) == 0 {
+		return out
+	}
+	content := make([]provider.ContentBlock, len(last.Content))
+	copy(content, last.Content)
+	content[len(content)-1].Cacheable = true
+	last.Content = content
+	out[len(out)-1] = last
+
+	return out
 }
 
 func (l *Loop) toolDefs() []provider.ToolDef {
@@ -312,6 +372,117 @@ func providerRole(r session.Role) provider.Role {
 // persisted session; must be called before the first Run.
 func (l *Loop) SeedHistory(history []provider.Message) {
 	l.history = history
+}
+
+// defaultCompactKeepRecent is how many of the most recent messages Compact
+// leaves untouched, verbatim -- recent turns are exactly the ones still
+// worth full detail; older ones are what's safe to compress.
+const defaultCompactKeepRecent = 6
+
+// CompactResult reports what Compact did, for /compact to tell the user.
+type CompactResult struct {
+	MessagesBefore int
+	MessagesAfter  int
+	TokensBefore   int // input tokens the summarization call itself used, reading the discarded history
+}
+
+// Compact summarizes everything in history except the last keepRecent
+// messages (defaultCompactKeepRecent if keepRecent <= 0) into one synthetic
+// message, then replaces history with [summary, ...recent]. This only
+// rewrites the in-memory history the next request sends -- it never
+// deletes or rewrites persisted session rows, so /export and session
+// resume still see the full original conversation.
+func (l *Loop) Compact(ctx context.Context, keepRecent int) (CompactResult, error) {
+	if keepRecent <= 0 {
+		keepRecent = defaultCompactKeepRecent
+	}
+	before := len(l.history)
+	if before <= keepRecent {
+		return CompactResult{MessagesBefore: before, MessagesAfter: before}, nil
+	}
+
+	split := before - keepRecent
+	older, recent := l.history[:split], l.history[split:]
+
+	summary, usage, err := l.summarize(ctx, older)
+	if err != nil {
+		return CompactResult{}, fmt.Errorf("agent: compact: %w", err)
+	}
+	l.totalUsage.InputTokens += usage.InputTokens
+	l.totalUsage.OutputTokens += usage.OutputTokens
+	l.totalUsage.CacheReadTokens += usage.CacheReadTokens
+	l.totalUsage.CacheWriteTokens += usage.CacheWriteTokens
+
+	newHistory := make([]provider.Message, 0, 1+len(recent))
+	newHistory = append(newHistory, provider.Message{
+		Role: provider.RoleUser,
+		Content: []provider.ContentBlock{{
+			Kind: provider.ContentText,
+			Text: "[Compacted summary of earlier conversation]\n" + summary,
+		}},
+	})
+	newHistory = append(newHistory, recent...)
+
+	l.SeedHistory(newHistory)
+
+	return CompactResult{
+		MessagesBefore: before,
+		MessagesAfter:  len(newHistory),
+		TokensBefore:   usage.InputTokens,
+	}, nil
+}
+
+// summarize asks the model to summarize messages in one tool-free,
+// history-independent call -- it never touches l.history itself, so a
+// failed or unwanted summarization leaves the real conversation untouched.
+// Used only by Compact.
+func (l *Loop) summarize(ctx context.Context, messages []provider.Message) (string, provider.Usage, error) {
+	msgs := make([]provider.Message, 0, len(messages)+1)
+	msgs = append(msgs, messages...)
+	msgs = append(msgs, provider.Message{
+		Role: provider.RoleUser,
+		Content: []provider.ContentBlock{{
+			Kind: provider.ContentText,
+			Text: "Summarize the conversation above concisely: preserve concrete facts, " +
+				"decisions, file paths, and any state a continuation would need. This " +
+				"summary replaces the full history above, so it needs to stand alone.",
+		}},
+	})
+
+	stream, err := l.Provider.Stream(ctx, provider.Request{
+		Model:     l.Model,
+		Messages:  msgs,
+		MaxTokens: l.MaxTokens,
+	})
+	if err != nil {
+		return "", provider.Usage{}, fmt.Errorf("start summarization stream: %w", err)
+	}
+	defer stream.Close()
+
+	var text strings.Builder
+	var usage provider.Usage
+	for {
+		ev, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", provider.Usage{}, fmt.Errorf("summarization stream: %w", err)
+		}
+		switch ev.Kind {
+		case provider.KindTextDelta:
+			text.WriteString(ev.TextDelta)
+		case provider.KindUsage:
+			usage = ev.Usage
+		case provider.KindThinkingDelta, provider.KindToolCallStart, provider.KindToolCallDelta,
+			provider.KindToolCallEnd, provider.KindStopReason:
+			// No tools were offered (buildRequest is never used here), so
+			// these should never actually arrive; nothing to do with them
+			// if a provider sends one anyway.
+		}
+	}
+
+	return text.String(), usage, nil
 }
 
 // HistoryFromMessages reconstructs provider.Message history from persisted

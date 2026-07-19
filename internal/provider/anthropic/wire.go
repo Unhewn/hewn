@@ -25,6 +25,16 @@ type wireContent struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+
+	// Present on any block type -- marks it (and everything before it) as
+	// a prompt-caching breakpoint.
+	CacheControl *wireCacheControl `json:"cache_control,omitempty"`
+}
+
+// wireCacheControl is Anthropic's prompt-caching breakpoint marker.
+// "ephemeral" is the only type the API currently defines.
+type wireCacheControl struct {
+	Type string `json:"type"`
 }
 
 type wireMessage struct {
@@ -40,7 +50,7 @@ type wireTool struct {
 
 type wireRequest struct {
 	Model     string        `json:"model"`
-	System    string        `json:"system,omitempty"`
+	System    []wireContent `json:"system,omitempty"`
 	Messages  []wireMessage `json:"messages"`
 	Tools     []wireTool    `json:"tools,omitempty"`
 	MaxTokens int           `json:"max_tokens"`
@@ -50,9 +60,16 @@ type wireRequest struct {
 func toWireRequest(req provider.Request) (wireRequest, error) {
 	wr := wireRequest{
 		Model:     req.Model,
-		System:    req.System,
 		MaxTokens: req.MaxTokens,
 		Stream:    true,
+	}
+
+	for _, c := range req.System {
+		wc, err := toWireContent(c)
+		if err != nil {
+			return wireRequest{}, err
+		}
+		wr.System = append(wr.System, wc)
 	}
 
 	for _, m := range req.Messages {
@@ -79,6 +96,17 @@ func toWireRequest(req provider.Request) (wireRequest, error) {
 }
 
 func toWireContent(c provider.ContentBlock) (wireContent, error) {
+	wc, err := toWireContentUncached(c)
+	if err != nil {
+		return wireContent{}, err
+	}
+	if c.Cacheable {
+		wc.CacheControl = &wireCacheControl{Type: "ephemeral"}
+	}
+	return wc, nil
+}
+
+func toWireContentUncached(c provider.ContentBlock) (wireContent, error) {
 	switch c.Kind {
 	case provider.ContentText:
 		return wireContent{Type: "text", Text: c.Text}, nil

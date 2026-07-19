@@ -10,7 +10,7 @@ import (
 func TestToWireRequest(t *testing.T) {
 	req := provider.Request{
 		Model:  "claude-opus-4-8",
-		System: "be terse",
+		System: []provider.ContentBlock{{Kind: provider.ContentText, Text: "be terse", Cacheable: true}},
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Content: []provider.ContentBlock{
 				{Kind: provider.ContentText, Text: "hi"},
@@ -33,8 +33,14 @@ func TestToWireRequest(t *testing.T) {
 		t.Fatalf("toWireRequest: %v", err)
 	}
 
-	if wr.Model != "claude-opus-4-8" || wr.System != "be terse" || wr.MaxTokens != 1024 || !wr.Stream {
+	if wr.Model != "claude-opus-4-8" || wr.MaxTokens != 1024 || !wr.Stream {
 		t.Fatalf("unexpected top-level fields: %+v", wr)
+	}
+	if len(wr.System) != 1 || wr.System[0].Type != "text" || wr.System[0].Text != "be terse" {
+		t.Fatalf("System = %+v, want one cacheable text block", wr.System)
+	}
+	if wr.System[0].CacheControl == nil || wr.System[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("System[0].CacheControl = %+v, want an ephemeral breakpoint", wr.System[0].CacheControl)
 	}
 	if len(wr.Messages) != 3 {
 		t.Fatalf("got %d messages, want 3", len(wr.Messages))
@@ -61,5 +67,23 @@ func TestToWireRequest(t *testing.T) {
 	// Round-trip through JSON to catch struct tag mistakes.
 	if _, err := json.Marshal(wr); err != nil {
 		t.Fatalf("marshal wireRequest: %v", err)
+	}
+}
+
+func TestToWireContent_CacheableSetsCacheControl(t *testing.T) {
+	cacheable, err := toWireContent(provider.ContentBlock{Kind: provider.ContentText, Text: "hi", Cacheable: true})
+	if err != nil {
+		t.Fatalf("toWireContent: %v", err)
+	}
+	if cacheable.CacheControl == nil || cacheable.CacheControl.Type != "ephemeral" {
+		t.Errorf("CacheControl = %+v, want an ephemeral breakpoint", cacheable.CacheControl)
+	}
+
+	plain, err := toWireContent(provider.ContentBlock{Kind: provider.ContentText, Text: "hi"})
+	if err != nil {
+		t.Fatalf("toWireContent: %v", err)
+	}
+	if plain.CacheControl != nil {
+		t.Errorf("CacheControl = %+v, want nil for a non-cacheable block", plain.CacheControl)
 	}
 }
